@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { ActiveGuilds } from "../koo/activeGuildExtractor.js";
 import type { BattleStatusResolution, BattleType } from "../koo/battleStatusResolver.js";
+import type { PersistReason } from "../koo/persistDecision.js";
 
 const KO_OBSERVER_VIEWS_COLLECTION = "koObserverViews";
 const PHASE0_SMOKE_TEST_DOCUMENT_ID = "phase0_smoke_test";
@@ -38,6 +39,14 @@ type WritePhase1ScopeTestViewInput = {
   battleStatus: BattleStatusResolution;
   activeGuilds: ActiveGuilds;
   localGvgCastleCount: number;
+  phase3?: Phase3ObservationMetadata;
+};
+
+export type Phase3ObservationMetadata = {
+  observedAt: string;
+  shouldPersist: boolean;
+  persistReasons: PersistReason[];
+  checkpointSeconds: number;
 };
 
 type Phase1ScopeTestView = {
@@ -53,6 +62,7 @@ type Phase1ScopeTestView = {
     localGvgCastleCount: number;
     activeGuildCount: number;
   };
+  phase3?: Phase3ObservationMetadata;
   startedAt: string;
   updatedAt: string;
   stoppedAt: string;
@@ -60,6 +70,13 @@ type Phase1ScopeTestView = {
     app: "KOO";
     runId: string;
   };
+};
+
+export type Phase1ScopeTestViewSnapshot = Pick<
+  Phase1ScopeTestView,
+  "activeGuilds" | "updatedAt"
+> & {
+  phase3?: Phase3ObservationMetadata;
 };
 
 export async function writePhase0SmokeTestView(
@@ -92,6 +109,21 @@ export async function writePhase0SmokeTestView(
     .set(koObserverView);
 }
 
+export async function readPhase1ScopeTestView(
+  firestore: Firestore,
+): Promise<Phase1ScopeTestViewSnapshot | undefined> {
+  const snapshot = await firestore
+    .collection(KO_OBSERVER_VIEWS_COLLECTION)
+    .doc(PHASE1_SCOPE_TEST_DOCUMENT_ID)
+    .get();
+
+  if (!snapshot.exists) {
+    return undefined;
+  }
+
+  return snapshot.data() as Phase1ScopeTestViewSnapshot;
+}
+
 export async function writePhase1ScopeTestView(
   firestore: Firestore,
   input: WritePhase1ScopeTestViewInput,
@@ -110,6 +142,7 @@ export async function writePhase1ScopeTestView(
       localGvgCastleCount: input.localGvgCastleCount,
       activeGuildCount: Object.keys(input.activeGuilds).length,
     },
+    phase3: input.phase3,
     startedAt: nowIsoString,
     updatedAt: nowIsoString,
     stoppedAt: nowIsoString,

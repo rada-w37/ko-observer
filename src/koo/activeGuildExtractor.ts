@@ -1,4 +1,5 @@
 import type { GvgCastleState, LocalGvgLatest } from "../mentemori/types.js";
+import type { CastleObservationDiff } from "./castleObservationDiff.js";
 
 export type ActiveGuildRole = "defender" | "attacker" | "both";
 
@@ -7,6 +8,7 @@ export type ObservedCastle = {
   gvgCastleState: GvgCastleState;
   rawLastWinPartyKnockOutCount: number;
   lastWinPartyDefeatedCount: number;
+  observationDiff?: CastleObservationDiff;
 };
 
 export type ActiveGuild = {
@@ -40,6 +42,51 @@ export function extractActiveGuilds(localGvg: LocalGvgLatest): ActiveGuilds {
   }
 
   return activeGuilds;
+}
+
+export function attachObservationDiffs(
+  activeGuilds: ActiveGuilds,
+  observationDiffs: CastleObservationDiff[],
+): ActiveGuilds {
+  const observationDiffByCastleId = new Map(
+    observationDiffs.map((observationDiff) => [observationDiff.castleId, observationDiff]),
+  );
+
+  return Object.fromEntries(
+    Object.entries(activeGuilds).map(([guildId, activeGuild]) => [
+      guildId,
+      {
+        ...activeGuild,
+        castles: {
+          defending: attachDiffsToCastles(
+            activeGuild.castles.defending,
+            observationDiffByCastleId,
+          ),
+          attacking: attachDiffsToCastles(
+            activeGuild.castles.attacking,
+            observationDiffByCastleId,
+          ),
+        },
+      },
+    ]),
+  );
+}
+
+function attachDiffsToCastles(
+  observedCastles: ObservedCastle[],
+  observationDiffByCastleId: Map<number, CastleObservationDiff>,
+): ObservedCastle[] {
+  return observedCastles.map((observedCastle) => {
+    const observationDiff = observationDiffByCastleId.get(observedCastle.castleId);
+    if (!observationDiff) {
+      return observedCastle;
+    }
+
+    return {
+      ...observedCastle,
+      observationDiff,
+    };
+  });
 }
 
 function addActiveGuild(

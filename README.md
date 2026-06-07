@@ -13,13 +13,15 @@ Phase0では以下を実装しています。
 - `koObserverViews/phase0_smoke_test` への仮データ書き込み
 - GitHub Actionsからの手動実行
 
-## Phase1 / Phase2
+## Phase1 / Phase2 / Phase3
 
 Phase1の目的は、ギルドバトルの開催判定、監視scope決定、`activeGuilds` 抽出の土台を作ることです。
 
-Phase2では、`localgvg/latest` の各城データから、ギルドごとの防衛拠点・侵攻拠点の raw 観測材料を `activeGuilds` に保存します。保存先IDは暫定的に `koObserverViews/phase1_scope_test` のままです。本番寄りの `world_1001_current` などのID設計はPhase3以降で扱います。
+Phase2では、`localgvg/latest` の各城データから、ギルドごとの防衛拠点・侵攻拠点の raw 観測材料を `activeGuilds` に保存します。
 
-`KOO_MODE=phase1-scope-test` で起動すると、指定した `KOO_WORLD_ID` の `localgvg/latest` を取得し、Firestore `koObserverViews/phase1_scope_test` へ固定IDで上書き保存します。
+Phase3では、前回保存済みの `koObserverViews/phase1_scope_test` と最新 `localgvg/latest` を比較し、城単位の raw 観測差分とFirestore保存判定を行います。保存先IDは引き続き暫定的に `phase1_scope_test` のままです。本番寄りの `world_1001_current` などのID設計は後続Phaseで扱います。
+
+`KOO_MODE=phase1-scope-test` で起動すると、指定した `KOO_WORLD_ID` の `localgvg/latest` を取得し、必要な場合のみFirestore `koObserverViews/phase1_scope_test` へ固定IDで上書き保存します。
 
 `KOO_WORLD_ID` は mentemori API の4桁 `world_id` を指定します。`1` や `w1` ではありません。
 
@@ -37,21 +39,34 @@ Phase1時点では、`KOO_WORLD=1` から `KOO_WORLD_ID=1001` への変換機能
 - `3`: counterattack
 - `4`: counterattack successful
 
-`activeGuilds` は `GuildId` と `AttackerGuildId` から抽出し、ギルド名は `guilds` map から解決します。ギルド名が解決できない場合は、Phase1/2の暫定対応として `Guild {guildId}` を使います。
+`activeGuilds` は `GuildId` と `AttackerGuildId` から抽出し、ギルド名は `guilds` map から解決します。ギルド名が解決できない場合は、暫定対応として `Guild {guildId}` を使います。
 
-各ギルドには `castles.defending` と `castles.attacking` を保存します。各城には `castleId`, `gvgCastleState`, `rawLastWinPartyKnockOutCount`, `lastWinPartyDefeatedCount` を保存します。
+各ギルドには `castles.defending` と `castles.attacking` を保存します。各城には `castleId`, `gvgCastleState`, `rawLastWinPartyKnockOutCount`, `lastWinPartyDefeatedCount` を保存し、Phase3では必要に応じて `observationDiff` も保存します。
 
-`LastWinPartyKnockOutCount` はギルド全体のKO数ではありません。現在その拠点で勝ち残っている1パーティが連勝中に倒した相手パーティ数です。Phase2では城単位の観測値として保存し、ギルド単位に合算しません。
+`LastWinPartyKnockOutCount` はギルド全体のKO数ではありません。現在その拠点で勝ち残っている1パーティが連勝中に倒した相手パーティ数です。KOOでは城単位の観測値として保存し、ギルド単位に合算しません。
+
+Phase3では以下のいずれかの場合だけFirestoreへ保存します。
+
+- count reset
+- state changed
+- defender changed
+- attacker changed
+- checkpoint elapsed（固定30秒）
+
+count増加のみでは保存しません。
 
 ## 未実装
 
-以下はPhase2では未実装です。
+以下はPhase3では未実装です。
 
 - WebSocket接続
-- KO推定ロジック
-- 差分計算
-- リセット検知
+- KO確定推定
+- defeatedCount合算
+- ギルド単位KOランキング
+- Discord通知
+- 1秒ループ
 - 定周期 polling / scheduler
+- GitHub Actions cron
 - 履歴保存
 - Firestore schema最適化
 - GBM DB参照
@@ -76,7 +91,7 @@ Phase0 smoke test:
 npm run start
 ```
 
-Phase1 / Phase2 scope test:
+Phase1 / Phase2 / Phase3 scope test:
 
 ```bash
 KOO_MODE=phase1-scope-test KOO_WORLD_ID=1001 npm run start
