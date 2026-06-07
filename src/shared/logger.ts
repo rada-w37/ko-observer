@@ -3,6 +3,10 @@ export const logger = {
     console.log(`[INFO] ${message}`);
   },
 
+  warn(message: string): void {
+    console.warn(`[WARN] ${message}`);
+  },
+
   error(message: string, error: unknown): void {
     console.error(`[ERROR] ${message}`);
 
