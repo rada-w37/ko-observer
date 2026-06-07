@@ -21,6 +21,13 @@ import {
 } from "../koo/persistDecision.js";
 import { logger } from "../shared/logger.js";
 
+export type RunPhase1ScopeTestResult = {
+  shouldPersist: boolean;
+  persistReasons: string[];
+  activeGuildCount: number;
+  localGvgCastleCount: number;
+};
+
 type RunPhase1ScopeTestDependencies = {
   fetchLatestLocalGvg?: (worldId: string) => Promise<LocalGvgLatest>;
   readPhase1ScopeTestView?: typeof readPhase1ScopeTestView;
@@ -32,7 +39,7 @@ export async function runPhase1ScopeTest(
   config: AppConfig,
   firestore: Firestore,
   dependencies: RunPhase1ScopeTestDependencies = {},
-): Promise<void> {
+): Promise<RunPhase1ScopeTestResult> {
   if (!config.worldId) {
     throw new Error("KOO_WORLD_ID is required for phase1-scope-test.");
   }
@@ -60,6 +67,12 @@ export async function runPhase1ScopeTest(
     isCheckpointElapsed(previousObservedAt, observedAt, CHECKPOINT_SECONDS),
   );
   const activeGuildsWithDiffs = attachObservationDiffs(activeGuilds, observationDiffs);
+  const runResult: RunPhase1ScopeTestResult = {
+    shouldPersist: persistDecision.shouldPersist,
+    persistReasons: persistDecision.reasons,
+    activeGuildCount: Object.keys(activeGuilds).length,
+    localGvgCastleCount: latestLocalGvg.castles.length,
+  };
 
   if (battleStatus.unknownGvgCastleStates.length > 0) {
     logger.warn(
@@ -68,8 +81,7 @@ export async function runPhase1ScopeTest(
   }
 
   if (!persistDecision.shouldPersist) {
-    logger.info("KOO Phase1 scope test skipped Firestore write. shouldPersist=false");
-    return;
+    return runResult;
   }
 
   await (dependencies.writePhase1ScopeTestView ?? writePhase1ScopeTestView)(firestore, {
@@ -87,4 +99,6 @@ export async function runPhase1ScopeTest(
       checkpointSeconds: CHECKPOINT_SECONDS,
     },
   });
+
+  return runResult;
 }

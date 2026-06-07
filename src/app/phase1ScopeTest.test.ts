@@ -14,6 +14,8 @@ const baseConfig: AppConfig = {
   mode: "phase1-scope-test",
   runId: "local",
   worldId: "1001",
+  observeDurationSeconds: 120,
+  observeIntervalSeconds: 1,
 };
 
 test("does not write Firestore when API fetch fails", async () => {
@@ -38,7 +40,7 @@ test("writes when previous view does not exist", async () => {
   let writtenPersistReasons: string[] = [];
   let writtenObservationDiffExists = false;
 
-  await runPhase1ScopeTest(baseConfig, {} as Firestore, {
+  const result = await runPhase1ScopeTest(baseConfig, {} as Firestore, {
     now: () => new Date("2026-06-07T12:00:30.000Z"),
     fetchLatestLocalGvg: async () => createLocalGvgLatest(0),
     readPhase1ScopeTestView: async () => undefined,
@@ -53,12 +55,16 @@ test("writes when previous view does not exist", async () => {
   assert.equal(writtenActiveGuildCount, 1);
   assert.deepEqual(writtenPersistReasons, ["checkpoint_elapsed"]);
   assert.equal(writtenObservationDiffExists, true);
+  assert.equal(result.shouldPersist, true);
+  assert.deepEqual(result.persistReasons, ["checkpoint_elapsed"]);
+  assert.equal(result.activeGuildCount, 1);
+  assert.equal(result.localGvgCastleCount, 1);
 });
 
 test("does not write when only count increased before checkpoint", async () => {
   let writeCalled = false;
 
-  await runPhase1ScopeTest(baseConfig, {} as Firestore, {
+  const result = await runPhase1ScopeTest(baseConfig, {} as Firestore, {
     now: () => new Date("2026-06-07T12:00:10.000Z"),
     fetchLatestLocalGvg: async () => createLocalGvgLatest(1),
     readPhase1ScopeTestView: async () =>
@@ -72,6 +78,8 @@ test("does not write when only count increased before checkpoint", async () => {
   });
 
   assert.equal(writeCalled, false);
+  assert.equal(result.shouldPersist, false);
+  assert.deepEqual(result.persistReasons, []);
 });
 
 test("writes phase3 metadata and observation diff when state changed", async () => {

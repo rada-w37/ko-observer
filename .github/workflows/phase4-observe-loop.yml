@@ -1,0 +1,35 @@
+name: Phase4 Observe Loop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  phase4-observe-loop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Phase4 observe loop
+        run: npm run start
+        env:
+          KOO_MODE: phase4-observe-loop
+          KOO_WORLD_ID: "1001"
+          KOO_OBSERVE_DURATION_SECONDS: "120"
+          KOO_OBSERVE_INTERVAL_SECONDS: "1"
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
+          FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}

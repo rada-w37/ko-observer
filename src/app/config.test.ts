@@ -1,0 +1,72 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { loadConfig } from "./config.js";
+
+const baseEnv = {
+  FIREBASE_PROJECT_ID: "project",
+  FIREBASE_CLIENT_EMAIL: "client@example.com",
+  FIREBASE_PRIVATE_KEY: "private-key",
+};
+
+test("loads phase4 observe loop config with defaults", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase4-observe-loop",
+    KOO_WORLD_ID: "1001",
+  });
+
+  assert.equal(config.mode, "phase4-observe-loop");
+  assert.equal(config.worldId, "1001");
+  assert.equal(config.observeDurationSeconds, 120);
+  assert.equal(config.observeIntervalSeconds, 1);
+});
+
+test("loads observe duration and interval env values", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase4-observe-loop",
+    KOO_WORLD_ID: "1001",
+    KOO_OBSERVE_DURATION_SECONDS: "300",
+    KOO_OBSERVE_INTERVAL_SECONDS: "2",
+  });
+
+  assert.equal(config.observeDurationSeconds, 300);
+  assert.equal(config.observeIntervalSeconds, 2);
+});
+
+test("rejects invalid observe duration and interval values", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase4-observe-loop",
+        KOO_WORLD_ID: "1001",
+        KOO_OBSERVE_DURATION_SECONDS: "0",
+      }),
+    /KOO_OBSERVE_DURATION_SECONDS must be a positive number/,
+  );
+
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase4-observe-loop",
+        KOO_WORLD_ID: "1001",
+        KOO_OBSERVE_INTERVAL_SECONDS: "abc",
+      }),
+    /KOO_OBSERVE_INTERVAL_SECONDS must be a positive number/,
+  );
+});
+
+test("rejects observe duration over max limit", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase4-observe-loop",
+        KOO_WORLD_ID: "1001",
+        KOO_OBSERVE_DURATION_SECONDS: "3601",
+      }),
+    /KOO_OBSERVE_DURATION_SECONDS must be 3600 or less/,
+  );
+});

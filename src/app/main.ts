@@ -1,5 +1,6 @@
 import { loadConfig } from "./config.js";
 import { getJstDateString } from "./date.js";
+import { runObserveLoop } from "./observeLoop.js";
 import { runPhase1ScopeTest } from "./phase1ScopeTest.js";
 import { createFirestore } from "../firestore/admin.js";
 import { writePhase0SmokeTestView } from "../firestore/koObserverViewRepository.js";
@@ -12,8 +13,19 @@ async function main(): Promise<void> {
   logger.info(`KOO started. mode=${config.mode}`);
 
   if (config.mode === "phase1-scope-test") {
-    await runPhase1ScopeTest(config, firestore);
+    const result = await runPhase1ScopeTest(config, firestore);
+    if (result.shouldPersist) {
+      logger.info(`persist saved reasons=${JSON.stringify(result.persistReasons)}`);
+    } else {
+      logger.info("persist skipped");
+    }
     logger.info(`KOO Phase1 scope test completed. worldId=${config.worldId}`);
+    return;
+  }
+
+  if (config.mode === "phase4-observe-loop") {
+    await runObserveLoop(config, firestore);
+    logger.info(`KOO Phase4 observe loop completed. worldId=${config.worldId}`);
     return;
   }
 
