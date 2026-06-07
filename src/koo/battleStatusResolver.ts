@@ -28,8 +28,8 @@ export type BattleStatusResolution = {
 const ACTIVE_GVG_CASTLE_STATES = new Set<number>([
   GVG_CASTLE_STATE.activeDeclared,
   GVG_CASTLE_STATE.activeBattle,
-  GVG_CASTLE_STATE.activeOccupied,
-  GVG_CASTLE_STATE.activeOther,
+  GVG_CASTLE_STATE.activeCounterattack,
+  GVG_CASTLE_STATE.activeCounterattackSuccessful,
 ]);
 const INACTIVE_GVG_CASTLE_STATE = GVG_CASTLE_STATE.inactive;
 
@@ -39,7 +39,7 @@ export function resolveBattleStatus(
 ): BattleStatusResolution {
   const unknownGvgCastleStates = collectUnknownGvgCastleStates(castles);
   const isGuildBattleActive = castles.some((castle) =>
-    ACTIVE_GVG_CASTLE_STATES.has(castle.gvgCastleState),
+    ACTIVE_GVG_CASTLE_STATES.has(castle.GvgCastleState),
   );
 
   if (!isGuildBattleActive) {
@@ -69,7 +69,7 @@ function collectUnknownGvgCastleStates(castles: LocalGvgCastle[]): number[] {
   const unknownStates = new Set<number>();
 
   for (const castle of castles) {
-    const state = castle.gvgCastleState;
+    const state = castle.GvgCastleState;
     if (state !== INACTIVE_GVG_CASTLE_STATE && !ACTIVE_GVG_CASTLE_STATES.has(state)) {
       unknownStates.add(state);
     }

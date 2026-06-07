@@ -5,35 +5,49 @@ import { fetchLatestLocalGvg } from "./apiClient.js";
 test("fetches and normalizes localgvg/latest response", async () => {
   const fetchMock = async (): Promise<Response> =>
     new Response(
-      JSON.stringify([
-        {
-          GvgCastleState: 1,
-          Guild: {
-            GuildId: 100,
-            GuildName: "Defender",
-          },
-          AttackerGuild: {
-            GuildId: 200,
-            GuildName: "Attacker",
+      JSON.stringify({
+        status: 200,
+        timestamp: 1780821188,
+        data: {
+          world_id: 1001,
+          castles: [
+            {
+              CastleId: 1,
+              GuildId: 100001,
+              AttackerGuildId: 200001,
+              AttackPartyCount: 0,
+              DefensePartyCount: 120,
+              GvgCastleState: 1,
+              UtcFallenTimeStamp: 0,
+              LastWinPartyKnockOutCount: 0,
+            },
+          ],
+          guilds: {
+            "100001": "Defender",
+            "200001": "Attacker",
           },
         },
-      ]),
+      }),
       {
         status: 200,
       },
     );
 
-  const result = await fetchLatestLocalGvg("w1", fetchMock as typeof fetch);
+  const result = await fetchLatestLocalGvg("1001", fetchMock as typeof fetch);
 
-  assert.equal(result.castles.length, 1);
-  assert.equal(result.castles[0]?.gvgCastleState, 1);
-  assert.deepEqual(result.castles[0]?.defenderGuild, {
-    guildId: "100",
-    guildName: "Defender",
+  assert.equal(result.worldId, 1001);
+  assert.deepEqual(result.guilds, {
+    "100001": "Defender",
+    "200001": "Attacker",
   });
-  assert.deepEqual(result.castles[0]?.attackerGuild, {
-    guildId: "200",
-    guildName: "Attacker",
+  assert.equal(result.castles.length, 1);
+  assert.deepEqual(result.castles[0], {
+    CastleId: 1,
+    GuildId: 100001,
+    AttackerGuildId: 200001,
+    DefensePartyCount: 120,
+    GvgCastleState: 1,
+    LastWinPartyKnockOutCount: 0,
   });
 });
 
@@ -44,7 +58,7 @@ test("throws on API failure", async () => {
     });
 
   await assert.rejects(
-    () => fetchLatestLocalGvg("w1", fetchMock as typeof fetch),
+    () => fetchLatestLocalGvg("1001", fetchMock as typeof fetch),
     /status=404/,
   );
 });
@@ -56,7 +70,7 @@ test("throws on unexpected response shape", async () => {
     });
 
   await assert.rejects(
-    () => fetchLatestLocalGvg("w1", fetchMock as typeof fetch),
-    /Unexpected localgvg\/latest response shape/,
+    () => fetchLatestLocalGvg("1001", fetchMock as typeof fetch),
+    /Unexpected localgvg\/latest response envelope/,
   );
 });

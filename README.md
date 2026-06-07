@@ -19,13 +19,23 @@ Phase1の目的は、ギルドバトルの開催判定、監視scope決定、`ac
 
 `KOO_MODE=phase1-scope-test` で起動すると、指定した `KOO_WORLD_ID` の `localgvg/latest` を取得し、Firestore `koObserverViews/phase1_scope_test` へ固定IDで上書き保存します。
 
+`KOO_WORLD_ID` は mentemori API の4桁 `world_id` を指定します。`1` や `w1` ではありません。
+
+- Japan W1 = `1001`
+- Japan W10 = `1010`
+- Korea W4 = `2004`
+
+Phase1時点では、`KOO_WORLD=1` から `KOO_WORLD_ID=1001` への変換機能は未実装です。
+
 Phase1では `GvgCastleState` を以下のように扱います。
 
 - `0`: 非開催相当
-- `1` から `4`: ギルドバトル開催中相当
-- その他: unknownとしてログに出し、開催判定のactive扱いにはしない
+- `1`: declared / in battle
+- `2`: fallen
+- `3`: counterattack
+- `4`: counterattack successful
 
-`activeGuilds` は防衛ギルドと `AttackerGuild` から抽出します。ギルドIDが取得できる場合は `guildId` をkeyにします。ギルドIDが取得できずギルド名のみの場合は、Phase1の暫定対応として `guildName` をkeyにします。同名ギルドを区別できないため、この扱いは将来見直す前提です。
+`activeGuilds` は `GuildId` と `AttackerGuildId` から抽出し、ギルド名は `guilds` map から解決します。ギルド名が解決できない場合は、Phase1の暫定対応として `Guild {guildId}` を使います。
 
 ## 未実装
 
@@ -61,14 +71,14 @@ npm run start
 Phase1 scope test:
 
 ```bash
-KOO_MODE=phase1-scope-test KOO_WORLD_ID=w1 npm run start
+KOO_MODE=phase1-scope-test KOO_WORLD_ID=1001 npm run start
 ```
 
 PowerShellでは以下のように環境変数を設定します。
 
 ```powershell
 $env:KOO_MODE = "phase1-scope-test"
-$env:KOO_WORLD_ID = "w1"
+$env:KOO_WORLD_ID = "1001"
 npm.cmd run start
 ```
 

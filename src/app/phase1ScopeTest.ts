@@ -26,7 +26,7 @@ export async function runPhase1ScopeTest(
     config.worldId,
   );
   const battleStatus = resolveBattleStatus(latestLocalGvg.castles, config.worldId);
-  const activeGuilds = extractActiveGuilds(latestLocalGvg.castles);
+  const activeGuilds = extractActiveGuilds(latestLocalGvg);
 
   if (battleStatus.unknownGvgCastleStates.length > 0) {
     logger.warn(

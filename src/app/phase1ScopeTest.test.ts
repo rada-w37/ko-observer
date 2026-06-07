@@ -36,13 +36,18 @@ test("writes Phase1 scope test view after successful resolution", async () => {
 
   await runPhase1ScopeTest(baseConfig, {} as Firestore, {
     fetchLatestLocalGvg: async () => ({
+      worldId: 1001,
+      guilds: {
+        "1": "Defender",
+      },
       castles: [
         {
-          gvgCastleState: 1,
-          defenderGuild: {
-            guildId: "g1",
-            guildName: "Defender",
-          },
+          CastleId: 1,
+          GuildId: 1,
+          AttackerGuildId: 0,
+          DefensePartyCount: 120,
+          GvgCastleState: 1,
+          LastWinPartyKnockOutCount: 0,
         },
       ],
     }),

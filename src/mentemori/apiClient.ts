@@ -1,8 +1,8 @@
-import type { LocalGvgCastle, LocalGvgGuild, LocalGvgLatest } from "./types.js";
+import type { GvgCastleState, LocalGvgCastle, LocalGvgLatest } from "./types.js";
 
 type FetchFunction = typeof fetch;
 
-const BASE_URL = "https://mentemori.icu";
+const BASE_URL = "https://api.mentemori.icu";
 
 export async function fetchLatestLocalGvg(
   worldId: string,
@@ -26,117 +26,87 @@ export async function fetchLatestLocalGvg(
 }
 
 function normalizeLocalGvgLatest(responseBody: unknown, url: string): LocalGvgLatest {
-  const castleItems = findCastleItems(responseBody);
-
-  if (!castleItems) {
+  if (!isRecord(responseBody)) {
     throw new Error(`Unexpected localgvg/latest response shape: url=${url}`);
   }
 
+  const status = responseBody.status;
+  const timestamp = responseBody.timestamp;
+  const data = responseBody.data;
+  if (typeof status !== "number" || typeof timestamp !== "number" || !isRecord(data)) {
+    throw new Error(`Unexpected localgvg/latest response envelope: url=${url}`);
+  }
+
+  const worldId = data.world_id;
+  const castles = data.castles;
+  const guilds = data.guilds;
+  if (typeof worldId !== "number" || !Array.isArray(castles) || !isGuildMap(guilds)) {
+    throw new Error(`Unexpected localgvg/latest data shape: url=${url}`);
+  }
+
   return {
-    castles: castleItems.map(normalizeCastle),
+    worldId,
+    guilds,
+    castles: castles.map((castle) => normalizeCastle(castle, url)),
   };
 }
 
-function findCastleItems(responseBody: unknown): unknown[] | undefined {
-  if (Array.isArray(responseBody)) {
-    return responseBody;
-  }
-
-  if (!isRecord(responseBody)) {
-    return undefined;
-  }
-
-  const candidateKeys = ["castles", "Castles", "localGvg", "LocalGvg", "data", "Data", "items", "Items"];
-  for (const candidateKey of candidateKeys) {
-    const candidate = responseBody[candidateKey];
-    if (Array.isArray(candidate)) {
-      return candidate;
-    }
-  }
-
-  return undefined;
-}
-
-function normalizeCastle(rawCastle: unknown): LocalGvgCastle {
+function normalizeCastle(rawCastle: unknown, url: string): LocalGvgCastle {
   if (!isRecord(rawCastle)) {
-    return {
-      gvgCastleState: -1,
-    };
+    throw new Error(`Unexpected localgvg/latest castle shape: url=${url}`);
+  }
+
+  const CastleId = readNumber(rawCastle, "CastleId");
+  const GuildId = readNumber(rawCastle, "GuildId");
+  const AttackerGuildId = readNumber(rawCastle, "AttackerGuildId");
+  const DefensePartyCount = readNumber(rawCastle, "DefensePartyCount");
+  const GvgCastleState = readGvgCastleState(rawCastle, "GvgCastleState");
+  const LastWinPartyKnockOutCount = readNumber(rawCastle, "LastWinPartyKnockOutCount");
+
+  if (
+    CastleId === undefined ||
+    GuildId === undefined ||
+    AttackerGuildId === undefined ||
+    DefensePartyCount === undefined ||
+    GvgCastleState === undefined ||
+    LastWinPartyKnockOutCount === undefined
+  ) {
+    throw new Error(`Unexpected localgvg/latest castle fields: url=${url}`);
   }
 
   return {
-    gvgCastleState: readNumber(rawCastle, ["GvgCastleState", "gvgCastleState"]) ?? -1,
-    defenderGuild: readGuild(rawCastle, [
-      "Guild",
-      "guild",
-      "DefenderGuild",
-      "defenderGuild",
-      "OccupyGuild",
-      "occupyGuild",
-    ]),
-    attackerGuild: readGuild(rawCastle, ["AttackerGuild", "attackerGuild"]),
+    CastleId,
+    GuildId,
+    AttackerGuildId,
+    DefensePartyCount,
+    GvgCastleState,
+    LastWinPartyKnockOutCount,
   };
 }
 
-function readGuild(rawCastle: Record<string, unknown>, guildKeys: string[]): LocalGvgGuild | undefined {
-  for (const guildKey of guildKeys) {
-    const rawGuild = rawCastle[guildKey];
-    const guild = normalizeGuild(rawGuild);
-    if (guild) {
-      return guild;
-    }
-  }
-
-  const guildName = readString(rawCastle, ["GuildName", "guildName", "DefenderGuildName", "defenderGuildName"]);
-  if (!guildName) {
-    return undefined;
-  }
-
-  return {
-    guildId: readString(rawCastle, ["GuildId", "guildId", "DefenderGuildId", "defenderGuildId"]),
-    guildName,
-  };
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" ? value : undefined;
 }
 
-function normalizeGuild(rawGuild: unknown): LocalGvgGuild | undefined {
-  if (!isRecord(rawGuild)) {
-    return undefined;
-  }
-
-  const guildName = readString(rawGuild, ["GuildName", "guildName", "Name", "name"]);
-  if (!guildName) {
-    return undefined;
-  }
-
-  return {
-    guildId: readString(rawGuild, ["GuildId", "guildId", "Id", "id"]),
-    guildName,
-  };
-}
-
-function readNumber(record: Record<string, unknown>, keys: string[]): number | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "number") {
-      return value;
-    }
+function readGvgCastleState(
+  record: Record<string, unknown>,
+  key: string,
+): GvgCastleState | undefined {
+  const value = readNumber(record, key);
+  if (value === 0 || value === 1 || value === 2 || value === 3 || value === 4) {
+    return value;
   }
 
   return undefined;
 }
 
-function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
-    }
-    if (typeof value === "number") {
-      return value.toString();
-    }
+function isGuildMap(value: unknown): value is Record<string, string> {
+  if (!isRecord(value)) {
+    return false;
   }
 
-  return undefined;
+  return Object.values(value).every((guildName) => typeof guildName === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

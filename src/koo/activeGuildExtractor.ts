@@ -1,4 +1,4 @@
-import type { LocalGvgCastle, LocalGvgGuild } from "../mentemori/types.js";
+import type { LocalGvgLatest } from "../mentemori/types.js";
 
 export type ActiveGuildRole = "defender" | "attacker" | "both";
 
@@ -13,12 +13,12 @@ export type ActiveGuild = {
 
 export type ActiveGuilds = Record<string, ActiveGuild>;
 
-export function extractActiveGuilds(castles: LocalGvgCastle[]): ActiveGuilds {
+export function extractActiveGuilds(localGvg: LocalGvgLatest): ActiveGuilds {
   const activeGuilds: ActiveGuilds = {};
 
-  for (const castle of castles) {
-    addActiveGuild(activeGuilds, castle.defenderGuild, "defender");
-    addActiveGuild(activeGuilds, castle.attackerGuild, "attacker");
+  for (const castle of localGvg.castles) {
+    addActiveGuild(activeGuilds, localGvg.guilds, castle.GuildId, "defender");
+    addActiveGuild(activeGuilds, localGvg.guilds, castle.AttackerGuildId, "attacker");
   }
 
   return activeGuilds;
@@ -26,20 +26,21 @@ export function extractActiveGuilds(castles: LocalGvgCastle[]): ActiveGuilds {
 
 function addActiveGuild(
   activeGuilds: ActiveGuilds,
-  guild: LocalGvgGuild | undefined,
+  guilds: Record<string, string>,
+  guildId: number,
   role: Exclude<ActiveGuildRole, "both">,
 ): void {
-  if (!guild) {
+  if (guildId === 0) {
     return;
   }
 
-  const guildKey = guild.guildId ?? guild.guildName;
+  const guildKey = guildId.toString();
   const existingGuild = activeGuilds[guildKey];
 
   if (!existingGuild) {
     activeGuilds[guildKey] = {
-      guildId: guild.guildId ?? guild.guildName,
-      guildName: guild.guildName,
+      guildId: guildKey,
+      guildName: guilds[guildKey] ?? `Guild ${guildKey}`,
       role,
       baselineKoCount: 0,
       koCount: 0,
