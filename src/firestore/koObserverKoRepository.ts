@@ -30,8 +30,11 @@ type ExistingGuildKoTotal = {
 export async function initializePhase5KoObserverRun(
   firestore: Firestore,
   startedAt: Date,
-): Promise<void> {
-  await Promise.all([
+): Promise<{
+  deletedCastleKoDetailsCount: number;
+  deletedGuildKoTotalsCount: number;
+}> {
+  const [deletedCastleKoDetailsCount, deletedGuildKoTotalsCount] = await Promise.all([
     deleteSubcollection(firestore, KO_OBSERVER_RUNS_COLLECTION, CASTLE_KO_DETAILS_DOCUMENT_ID),
     deleteSubcollection(firestore, KO_OBSERVER_VIEWS_COLLECTION, GUILD_KO_TOTALS_DOCUMENT_ID),
   ]);
@@ -39,6 +42,11 @@ export async function initializePhase5KoObserverRun(
   await firestore.collection(KO_OBSERVER_RUNS_COLLECTION).doc(META_DOCUMENT_ID).set({
     lastStartedAt: Timestamp.fromDate(startedAt),
   });
+
+  return {
+    deletedCastleKoDetailsCount,
+    deletedGuildKoTotalsCount,
+  };
 }
 
 export async function writeCastleKoDetail(
@@ -115,7 +123,7 @@ async function deleteSubcollection(
   firestore: Firestore,
   parentCollectionId: string,
   parentDocumentId: string,
-): Promise<void> {
+): Promise<number> {
   const documents = await firestore
     .collection(parentCollectionId)
     .doc(parentDocumentId)
@@ -123,4 +131,5 @@ async function deleteSubcollection(
     .listDocuments();
 
   await Promise.all(documents.map((documentReference) => documentReference.delete()));
+  return documents.length;
 }

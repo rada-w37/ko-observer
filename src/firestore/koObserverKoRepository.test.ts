@@ -12,7 +12,7 @@ test("clears Phase5 collections and writes run meta on startup", async () => {
   firestore.seed("koObserverRuns/castleKoDetails/castleKoDetails/1", { stale: true });
   firestore.seed("koObserverViews/guildKoTotals/guildKoTotals/1001", { stale: true });
 
-  await initializePhase5KoObserverRun(
+  const result = await initializePhase5KoObserverRun(
     firestore as unknown as Firestore,
     new Date("2026-06-10T11:40:00.000Z"),
   );
@@ -26,6 +26,10 @@ test("clears Phase5 collections and writes run meta on startup", async () => {
     false,
   );
   assert.equal(firestore.has("koObserverRuns/meta"), true);
+  assert.deepEqual(result, {
+    deletedCastleKoDetailsCount: 1,
+    deletedGuildKoTotalsCount: 1,
+  });
 });
 
 test("writes castle detail without internal debug fields", async () => {

@@ -51,14 +51,40 @@ export async function runPhase5KoObserveLoop(
   const castleStates = new Map<number, KoCastleState>();
   const startedAt = now();
   const endAtMilliseconds = startedAt.getTime() + config.observeDurationSeconds * 1000;
+  const counters = {
+    websocketMessageReceivedCount: 0,
+    parsedCastleStatusCount: 0,
+    castleKoDetailsWriteCount: 0,
+    guildKoTotalsUpdateCount: 0,
+  };
   let nextGuildTotalUpdateAt = startedAt.getTime() + GUILD_TOTAL_UPDATE_INTERVAL_MILLISECONDS;
   let guildTotalsDirty = false;
   let payloadProcessing: Promise<void> = Promise.resolve();
 
-  await initializeRun(firestore, startedAt);
+  const initializeResult = await initializeRun(firestore, startedAt);
+  logger.info(
+    `startup clear completed castleKoDetails=${initializeResult.deletedCastleKoDetailsCount} guildKoTotals=${initializeResult.deletedGuildKoTotalsCount}`,
+  );
+  logger.info(`meta lastStartedAt saved value=${startedAt.toISOString()}`);
 
   realtimeClient.addEventListener((event) => {
+    if (event.type === "opened") {
+      logger.info("websocket opened");
+      return;
+    }
+
+    if (event.type === "subscriptionSent") {
+      logger.info("subscription sent");
+      return;
+    }
+
+    if (event.type === "disconnected") {
+      logger.info(`websocket closed reason=${event.reason ?? "unknown"}`);
+      return;
+    }
+
     if (event.type === "payloadReceived") {
+      counters.websocketMessageReceivedCount += 1;
       payloadProcessing = payloadProcessing
         .then(() => handlePayload(event.payload, now()))
         .catch((error: unknown) => {
@@ -75,6 +101,7 @@ export async function runPhase5KoObserveLoop(
   logger.info(
     `Phase5 KO observe loop started durationSeconds=${config.observeDurationSeconds}`,
   );
+  logger.info(`websocket connecting worldId=${worldId}`);
   await realtimeClient.connect(worldId);
 
   try {
@@ -96,6 +123,12 @@ export async function runPhase5KoObserveLoop(
     realtimeClient.disconnect("duration reached");
   }
 
+  logger.info(
+    `Phase5 summary websocket message received count=${counters.websocketMessageReceivedCount}`,
+  );
+  logger.info(`Phase5 summary parsed castle status count=${counters.parsedCastleStatusCount}`);
+  logger.info(`Phase5 summary castleKoDetails write count=${counters.castleKoDetailsWriteCount}`);
+  logger.info(`Phase5 summary guildKoTotals update count=${counters.guildKoTotalsUpdateCount}`);
   logger.info("Phase5 KO observe loop completed.");
 
   async function handlePayload(payload: RealtimePayloadBytes, receivedAt: Date): Promise<void> {
@@ -103,6 +136,11 @@ export async function runPhase5KoObserveLoop(
     if (parserResult.status === "error") {
       logger.warn(`Phase5 realtime parser error: ${parserResult.error.message}`);
     }
+
+    const castleStatusMessages = parserResult.messages.filter(
+      (message) => message.type === "castleStatus",
+    );
+    counters.parsedCastleStatusCount += castleStatusMessages.length;
 
     for (const message of parserResult.messages) {
       if (message.type === "guild" && message.guildId && message.guildName) {
@@ -128,11 +166,7 @@ export async function runPhase5KoObserveLoop(
 
       if (result.shouldPersistCastle) {
         await persistCastleKoDetail(firestore, createKoCastlePublicSnapshot(result.state));
-        logger.info(
-          `Phase5 castle saved castleId=${message.castleId} reasons=${JSON.stringify(
-            result.reasons,
-          )}`,
-        );
+        counters.castleKoDetailsWriteCount += 1;
       }
 
       if (result.shouldUpdateGuildTotals) {
@@ -153,8 +187,8 @@ export async function runPhase5KoObserveLoop(
       ]),
     );
     await persistGuildKoTotals(firestore, writeInput);
+    counters.guildKoTotalsUpdateCount += writeInput.size;
     guildTotalsDirty = false;
-    logger.info(`Phase5 guild totals saved count=${writeInput.size}`);
   }
 
   function getGuildName(rawGuildId: string | null): string | null {

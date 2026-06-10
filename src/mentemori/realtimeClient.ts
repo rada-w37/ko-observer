@@ -21,6 +21,8 @@ type WebSocketLike = {
 };
 
 export type GvgRealtimeClientEvent =
+  | { type: "opened" }
+  | { type: "subscriptionSent" }
   | { type: "connected" }
   | { type: "disconnected"; reason?: string }
   | { type: "payloadReceived"; payload: RealtimePayloadBytes }
@@ -63,7 +65,9 @@ export class GvgRealtimeClient {
 
     return new Promise((resolve, reject) => {
       socket.addEventListener("open", () => {
+        this.emit({ type: "opened" });
         socket.send(createGuildBattleSubscriptionPayload(worldId));
+        this.emit({ type: "subscriptionSent" });
         this.emit({ type: "connected" });
         resolve();
       });
