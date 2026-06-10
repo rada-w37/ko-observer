@@ -12,7 +12,7 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
 - Phase5は `wss://api.mentemori.icu/gvg` WebSocketを入力にする。
 - GBMの既存WebSocket parser / streamId設計をKOO向けに移植済み。
 - Node 22標準の `WebSocket` を使うため、追加npm依存はなし。
-- Phase5用GitHub Actions workflowは未追加。まず手動実行で実ログ確認する。
+- Phase5 smoke test用GitHub Actions workflowを追加済み。`workflow_dispatch` のみで、scheduleは未追加。
 
 ## Completed
 
@@ -43,10 +43,17 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
   - 起動情報: `koObserverRuns/meta`
 - `koObserverViews/guildKoTotals/{guildId}` はドキュメントIDをguildIdとして使い、本文に `guildId` フィールドを保存しない。
 - READMEと `.env.example` をPhase5手動実行前提で更新。
+- Phase5 smoke test用workflow `.github/workflows/phase5-ko-observe-loop.yml` を追加。
+  - `KOO_MODE=phase5-ko-observe-loop`
+  - `world_id` inputを `KOO_WORLD_ID` に渡す
+  - `duration_seconds` inputを `KOO_OBSERVE_DURATION_SECONDS` に渡す
+  - default `world_id=1001`
+  - default `duration_seconds=60`
+  - scheduleなし
 
 ## Known Issues
 
-- Phase5は実WebSocket接続での手動実行が未確認。
+- Phase5は実WebSocket接続でのGitHub Actions手動実行が未確認。
 - Firestore実環境での起動時クリア、`lastStartedAt` 保存、castle detail / guild total保存は未確認。
 - 攻守切り替わり時に防衛数/侵攻数が入れ替わるかは未確認。
 - KO数が0へ戻るか、2〜5など中途半端に下がるかは未確認。
@@ -61,23 +68,27 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
    - `npm.cmd run test`
    - `npm.cmd run typecheck`
    - `npm.cmd run build`
-3. Phase5を短時間で手動実行する。
+3. Phase5をGitHub Actionsから短時間で手動実行する。
+   - workflow: `.github/workflows/phase5-ko-observe-loop.yml`
+   - `world_id`: `1001`
+   - `duration_seconds`: `60`
+4. ローカルで手動実行する場合は以下を使う。
    ```powershell
    $env:KOO_MODE = "phase5-ko-observe-loop"
    $env:KOO_WORLD_ID = "1001"
    $env:KOO_OBSERVE_DURATION_SECONDS = "120"
    npm.cmd run start
    ```
-4. Firestoreで以下を確認する。
+5. Firestoreで以下を確認する。
    - `koObserverRuns/meta.lastStartedAt`
    - `koObserverRuns/castleKoDetails`
    - `koObserverViews/guildKoTotals`
-5. 実ログで以下を確認する。
+6. 実ログで以下を確認する。
    - WebSocket接続とpayload受信
    - castle saveログ
    - guild totals saveログ
    - unknown / suspicious の発生傾向
-6. Phase6ではGBM側表示、heartbeat、実ログに基づく補正要否を検討する。
+7. Phase6ではGBM側表示、heartbeat、実ログに基づく補正要否を検討する。
 
 ## Files of Interest
 
@@ -92,6 +103,7 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
 - `src/koo/koAttribution.test.ts`
 - `src/mentemori/realtimeParser.test.ts`
 - `src/firestore/koObserverKoRepository.test.ts`
+- `.github/workflows/phase5-ko-observe-loop.yml`
 - `README.md`
 - `.env.example`
 
