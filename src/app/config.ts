@@ -8,13 +8,15 @@ export type AppConfig = {
   ownGuildName?: string;
   observeDurationSeconds: number;
   observeIntervalSeconds: number;
+  seedClear: boolean;
 };
 
 export type KooMode =
   | "phase0-smoke-test"
   | "phase1-scope-test"
   | "phase4-observe-loop"
-  | "phase5-ko-observe-loop";
+  | "phase5-ko-observe-loop"
+  | "phase6-seed-dummy-guild-ko-totals";
 
 const DEFAULT_OBSERVE_DURATION_SECONDS = 120;
 const DEFAULT_OBSERVE_INTERVAL_SECONDS = 1;
@@ -33,7 +35,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (
     (mode === "phase1-scope-test" ||
       mode === "phase4-observe-loop" ||
-      mode === "phase5-ko-observe-loop") &&
+      mode === "phase5-ko-observe-loop" ||
+      mode === "phase6-seed-dummy-guild-ko-totals") &&
     !env.KOO_WORLD_ID
   ) {
     missingKeys.push("KOO_WORLD_ID");
@@ -49,6 +52,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     "KOO_OBSERVE_INTERVAL_SECONDS",
     DEFAULT_OBSERVE_INTERVAL_SECONDS,
   );
+  const seedClear = loadBooleanEnv(env.KOO_SEED_CLEAR, "KOO_SEED_CLEAR", true);
 
   if (observeDurationSeconds > MAX_OBSERVE_DURATION_SECONDS) {
     throw new Error(
@@ -70,6 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ownGuildName: env.KOO_OWN_GUILD_NAME,
     observeDurationSeconds,
     observeIntervalSeconds,
+    seedClear,
   };
 }
 
@@ -82,7 +87,8 @@ function loadMode(mode: string | undefined): KooMode {
     mode === "phase0-smoke-test" ||
     mode === "phase1-scope-test" ||
     mode === "phase4-observe-loop" ||
-    mode === "phase5-ko-observe-loop"
+    mode === "phase5-ko-observe-loop" ||
+    mode === "phase6-seed-dummy-guild-ko-totals"
   ) {
     return mode;
   }
@@ -92,6 +98,26 @@ function loadMode(mode: string | undefined): KooMode {
 
 function restorePrivateKey(privateKey: string): string {
   return privateKey.replace(/\\n/g, "\n");
+}
+
+function loadBooleanEnv(
+  rawValue: string | undefined,
+  envKey: string,
+  defaultValue: boolean,
+): boolean {
+  if (!rawValue) {
+    return defaultValue;
+  }
+
+  const normalizedValue = rawValue.trim().toLowerCase();
+  if (normalizedValue === "true") {
+    return true;
+  }
+  if (normalizedValue === "false") {
+    return false;
+  }
+
+  throw new Error(`${envKey} must be true or false.`);
 }
 
 function loadPositiveNumberEnv(

@@ -13,6 +13,7 @@ const baseConfig: AppConfig = {
   worldId: "1001",
   observeDurationSeconds: 3,
   observeIntervalSeconds: 1,
+  seedClear: true,
 };
 
 test("runs multiple iterations until duration is exceeded", async () => {

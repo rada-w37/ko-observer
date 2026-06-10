@@ -3,6 +3,7 @@
 ## Current Goal
 
 KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行で実WebSocketログとFirestore保存結果を確認する。
+Phase6のGBM連携確認用に、dummy guild KO totals投入modeと手動workflowを追加済み。
 
 ## Current Status
 
@@ -13,6 +14,7 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
 - GBMの既存WebSocket parser / streamId設計をKOO向けに移植済み。
 - Node 22標準の `WebSocket` を使うため、追加npm依存はなし。
 - Phase5 smoke test用GitHub Actions workflowを追加済み。`workflow_dispatch` のみで、scheduleは未追加。
+- Phase6 dummy seed用GitHub Actions workflowを追加済み。`workflow_dispatch` のみで、scheduleは未追加。
 
 ## Completed
 
@@ -50,11 +52,25 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
   - default `world_id=1001`
   - default `duration_seconds=60`
   - scheduleなし
+- Phase6 dummy seed mode `phase6-seed-dummy-guild-ko-totals` を追加。
+  - `KOO_WORLD_ID` の `localgvg/latest` を実行時に取得
+  - 実在するguildId / guildNameから最大5件を選ぶ
+  - KO数のみダミー値
+  - `koObserverViews/guildKoTotals/{guildId}` に保存
+  - 保存フィールドは `guildName`, `totalVictimKoCount`, `updatedAt`
+  - `koObserverRuns/meta.lastStartedAt` も更新
+  - `KOO_SEED_CLEAR=true` の場合は `koObserverViews/guildKoTotals` をクリア
+  - `koObserverRuns/castleKoDetails` は触らない
+- Phase6 dummy seed用workflow `.github/workflows/phase6-seed-dummy-guild-ko-totals.yml` を追加。
+  - default `world_id=1037`
+  - default `clear=true`
+  - scheduleなし
 
 ## Known Issues
 
 - Phase5は実WebSocket接続でのGitHub Actions手動実行が未確認。
 - Firestore実環境での起動時クリア、`lastStartedAt` 保存、castle detail / guild total保存は未確認。
+- Phase6 dummy seedのGitHub Actions手動実行とFirestore保存結果は未確認。
 - 攻守切り替わり時に防衛数/侵攻数が入れ替わるかは未確認。
 - KO数が0へ戻るか、2〜5など中途半端に下がるかは未確認。
 - 21:15〜21:30頃のpartyCount追加とKO同時発生頻度は未確認。
@@ -89,6 +105,7 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
    - guild totals saveログ
    - unknown / suspicious の発生傾向
 7. Phase6ではGBM側表示、heartbeat、実ログに基づく補正要否を検討する。
+8. Phase6 dummy seed workflowを手動実行し、GBM側から `koObserverViews/guildKoTotals` を購読・表示できるか確認する。
 
 ## Files of Interest
 
@@ -104,6 +121,9 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
 - `src/mentemori/realtimeParser.test.ts`
 - `src/firestore/koObserverKoRepository.test.ts`
 - `.github/workflows/phase5-ko-observe-loop.yml`
+- `src/app/phase6SeedDummyGuildKoTotals.ts`
+- `src/app/phase6SeedDummyGuildKoTotals.test.ts`
+- `.github/workflows/phase6-seed-dummy-guild-ko-totals.yml`
 - `README.md`
 - `.env.example`
 
@@ -113,4 +133,4 @@ KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行
 - `npm.cmd run typecheck`: 成功
 - `npm.cmd run build`: 成功
 - `git diff --check`: 成功
-- `git status --short`: Phase5変更ファイルのみ
+- `git status --short`: Phase6 dummy seed変更ファイルのみ

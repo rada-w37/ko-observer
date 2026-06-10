@@ -2,6 +2,7 @@ import { loadConfig } from "./config.js";
 import { getJstDateString } from "./date.js";
 import { runObserveLoop } from "./observeLoop.js";
 import { runPhase5KoObserveLoop } from "./phase5KoObserveLoop.js";
+import { runPhase6SeedDummyGuildKoTotals } from "./phase6SeedDummyGuildKoTotals.js";
 import { runPhase1ScopeTest } from "./phase1ScopeTest.js";
 import { createFirestore } from "../firestore/admin.js";
 import { writePhase0SmokeTestView } from "../firestore/koObserverViewRepository.js";
@@ -33,6 +34,12 @@ async function main(): Promise<void> {
   if (config.mode === "phase5-ko-observe-loop") {
     await runPhase5KoObserveLoop(config, firestore);
     logger.info(`KOO Phase5 KO observe loop completed. worldId=${config.worldId}`);
+    return;
+  }
+
+  if (config.mode === "phase6-seed-dummy-guild-ko-totals") {
+    await runPhase6SeedDummyGuildKoTotals(config, firestore);
+    logger.info(`KOO Phase6 dummy guild KO totals seed completed. worldId=${config.worldId}`);
     return;
   }
 

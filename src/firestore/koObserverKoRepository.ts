@@ -14,6 +14,12 @@ type WriteGuildKoTotalInput = {
   sourceUpdatedAt: Date;
 };
 
+type WriteSeedGuildKoTotalInput = {
+  guildName: string | null;
+  totalVictimKoCount: number;
+  updatedAt: Date;
+};
+
 type ExistingCastleKoDetail = {
   defender?: {
     koVictimCount?: number;
@@ -47,6 +53,23 @@ export async function initializePhase5KoObserverRun(
     deletedCastleKoDetailsCount,
     deletedGuildKoTotalsCount,
   };
+}
+
+export async function writeKoObserverRunMeta(
+  firestore: Firestore,
+  lastStartedAt: Date,
+): Promise<void> {
+  await firestore.collection(KO_OBSERVER_RUNS_COLLECTION).doc(META_DOCUMENT_ID).set({
+    lastStartedAt: Timestamp.fromDate(lastStartedAt),
+  });
+}
+
+export async function clearGuildKoTotals(firestore: Firestore): Promise<number> {
+  return deleteSubcollection(
+    firestore,
+    KO_OBSERVER_VIEWS_COLLECTION,
+    GUILD_KO_TOTALS_DOCUMENT_ID,
+  );
 }
 
 export async function writeCastleKoDetail(
@@ -115,6 +138,26 @@ export async function writeGuildKoTotals(
         updatedAt: Timestamp.fromDate(input.updatedAt),
         sourceUpdatedAt: Timestamp.fromDate(input.sourceUpdatedAt),
       });
+    }),
+  );
+}
+
+export async function writeSeedGuildKoTotals(
+  firestore: Firestore,
+  guildKoTotals: Map<string, WriteSeedGuildKoTotalInput>,
+): Promise<void> {
+  await Promise.all(
+    [...guildKoTotals].map(async ([guildId, input]) => {
+      await firestore
+        .collection(KO_OBSERVER_VIEWS_COLLECTION)
+        .doc(GUILD_KO_TOTALS_DOCUMENT_ID)
+        .collection(GUILD_KO_TOTALS_DOCUMENT_ID)
+        .doc(guildId)
+        .set({
+          guildName: input.guildName,
+          totalVictimKoCount: input.totalVictimKoCount,
+          updatedAt: Timestamp.fromDate(input.updatedAt),
+        });
     }),
   );
 }

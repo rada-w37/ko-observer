@@ -16,6 +16,7 @@ const baseConfig: AppConfig = {
   worldId: "1001",
   observeDurationSeconds: 120,
   observeIntervalSeconds: 1,
+  seedClear: true,
 };
 
 test("does not write Firestore when API fetch fails", async () => {

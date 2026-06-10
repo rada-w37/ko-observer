@@ -47,6 +47,42 @@ test("loads phase5 KO observe loop config", () => {
   assert.equal(config.observeDurationSeconds, 60);
 });
 
+test("loads phase6 dummy seed config with clear default", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase6-seed-dummy-guild-ko-totals",
+    KOO_WORLD_ID: "1037",
+  });
+
+  assert.equal(config.mode, "phase6-seed-dummy-guild-ko-totals");
+  assert.equal(config.worldId, "1037");
+  assert.equal(config.seedClear, true);
+});
+
+test("loads phase6 dummy seed clear false", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase6-seed-dummy-guild-ko-totals",
+    KOO_WORLD_ID: "1037",
+    KOO_SEED_CLEAR: "false",
+  });
+
+  assert.equal(config.seedClear, false);
+});
+
+test("rejects invalid seed clear value", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase6-seed-dummy-guild-ko-totals",
+        KOO_WORLD_ID: "1037",
+        KOO_SEED_CLEAR: "yes",
+      }),
+    /KOO_SEED_CLEAR must be true or false/,
+  );
+});
+
 test("rejects invalid observe duration and interval values", () => {
   assert.throws(
     () =>

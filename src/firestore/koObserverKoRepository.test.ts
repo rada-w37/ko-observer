@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Firestore } from "firebase-admin/firestore";
 import {
+  clearGuildKoTotals,
   initializePhase5KoObserverRun,
+  writeKoObserverRunMeta,
   writeCastleKoDetail,
   writeGuildKoTotals,
+  writeSeedGuildKoTotals,
 } from "./koObserverKoRepository.js";
 
 test("clears Phase5 collections and writes run meta on startup", async () => {
@@ -91,6 +94,48 @@ test("writes guild total without guildId field and keeps larger total", async ()
   const stored = firestore.get("koObserverViews/guildKoTotals/guildKoTotals/1001001");
   assert.equal(stored.guildId, undefined);
   assert.equal(stored.totalVictimKoCount, 9);
+});
+
+test("clears only guildKoTotals for seed mode", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seed("koObserverRuns/castleKoDetails/castleKoDetails/1", { keep: true });
+  firestore.seed("koObserverViews/guildKoTotals/guildKoTotals/1001001", { stale: true });
+
+  const deletedCount = await clearGuildKoTotals(firestore as unknown as Firestore);
+
+  assert.equal(deletedCount, 1);
+  assert.equal(firestore.has("koObserverRuns/castleKoDetails/castleKoDetails/1"), true);
+  assert.equal(
+    firestore.has("koObserverViews/guildKoTotals/guildKoTotals/1001001"),
+    false,
+  );
+});
+
+test("writes seed guild total fields and run meta", async () => {
+  const firestore = new FakeFirestore();
+  const updatedAt = new Date("2026-06-10T12:00:00.000Z");
+
+  await writeSeedGuildKoTotals(
+    firestore as unknown as Firestore,
+    new Map([
+      [
+        "1037001",
+        {
+          guildName: "Guild A",
+          totalVictimKoCount: 12,
+          updatedAt,
+        },
+      ],
+    ]),
+  );
+  await writeKoObserverRunMeta(firestore as unknown as Firestore, updatedAt);
+
+  const stored = firestore.get("koObserverViews/guildKoTotals/guildKoTotals/1037001");
+  assert.equal(stored.guildName, "Guild A");
+  assert.equal(stored.totalVictimKoCount, 12);
+  assert.equal(stored.sourceUpdatedAt, undefined);
+  assert.equal(stored.guildId, undefined);
+  assert.equal(firestore.has("koObserverRuns/meta"), true);
 });
 
 class FakeFirestore {
