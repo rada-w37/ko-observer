@@ -34,6 +34,19 @@ test("loads observe duration and interval env values", () => {
   assert.equal(config.observeIntervalSeconds, 2);
 });
 
+test("loads phase5 KO observe loop config", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase5-ko-observe-loop",
+    KOO_WORLD_ID: "1001",
+    KOO_OBSERVE_DURATION_SECONDS: "60",
+  });
+
+  assert.equal(config.mode, "phase5-ko-observe-loop");
+  assert.equal(config.worldId, "1001");
+  assert.equal(config.observeDurationSeconds, 60);
+});
+
 test("rejects invalid observe duration and interval values", () => {
   assert.throws(
     () =>

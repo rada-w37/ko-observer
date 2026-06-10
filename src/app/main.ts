@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { getJstDateString } from "./date.js";
 import { runObserveLoop } from "./observeLoop.js";
+import { runPhase5KoObserveLoop } from "./phase5KoObserveLoop.js";
 import { runPhase1ScopeTest } from "./phase1ScopeTest.js";
 import { createFirestore } from "../firestore/admin.js";
 import { writePhase0SmokeTestView } from "../firestore/koObserverViewRepository.js";
@@ -26,6 +27,12 @@ async function main(): Promise<void> {
   if (config.mode === "phase4-observe-loop") {
     await runObserveLoop(config, firestore);
     logger.info(`KOO Phase4 observe loop completed. worldId=${config.worldId}`);
+    return;
+  }
+
+  if (config.mode === "phase5-ko-observe-loop") {
+    await runPhase5KoObserveLoop(config, firestore);
+    logger.info(`KOO Phase5 KO observe loop completed. worldId=${config.worldId}`);
     return;
   }
 

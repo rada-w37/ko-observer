@@ -2,79 +2,103 @@
 
 ## Current Goal
 
-KOO Phase4までの状態を前提に、次はGitHub Actions手動実行で短時間observe loopを実環境確認する。
+KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行で実WebSocketログとFirestore保存結果を確認する。
 
 ## Current Status
 
 - TypeScript + Node.js 22 CLI基盤は実装済み。
-- Firebase Admin SDKでFirestoreへ書き込み可能。
-- `localgvg/latest` 実APIは `https://api.mentemori.icu/{worldId}/localgvg/latest` を使用。
-- Phase4で `phase4-observe-loop` modeを追加済み。
-- 保存先は引き続き `koObserverViews/phase1_scope_test` 固定。
-- 直近コミット: `a15f35a feat(koo): step4 add observe loop workflow`
+- 既存 `phase4-observe-loop` は維持済み。Phase5では置換していない。
+- Phase5用に `phase5-ko-observe-loop` modeを追加済み。
+- Phase5は `wss://api.mentemori.icu/gvg` WebSocketを入力にする。
+- GBMの既存WebSocket parser / streamId設計をKOO向けに移植済み。
+- Node 22標準の `WebSocket` を使うため、追加npm依存はなし。
+- Phase5用GitHub Actions workflowは未追加。まず手動実行で実ログ確認する。
 
-## Architecture
+## Completed
 
-- `src/app/main.ts`: mode分岐。
-- `src/app/config.ts`: env読み込み。`phase0-smoke-test`, `phase1-scope-test`, `phase4-observe-loop` 対応。
-- `src/app/phase1ScopeTest.ts`: 単発取得、activeGuilds生成、Phase3差分、保存判定、必要時Firestore保存。
-- `src/app/observeLoop.ts`: duration内で `runPhase1ScopeTest` を繰り返す。
-- `src/mentemori/apiClient.ts`: `localgvg/latest` 取得。
-- `src/koo/*`: 開催判定、activeGuilds抽出、城単位差分、保存判定。
-- `src/firestore/koObserverViewRepository.ts`: `phase1_scope_test` 読み書き。
-
-## Decisions
-
-- `KOO_WORLD_ID` は `1001` 形式のAPI world_idを指定する。
-- world変換機能は未実装。
-- `LastWinPartyKnockOutCount` は城単位のraw観測値として保存し、ギルド単位へ合算しない。
-- count増加のみではFirestore保存しない。
-- 保存条件は count reset / state changed / defender changed / attacker changed / checkpoint elapsed。
-- checkpointは固定30秒。
-- observe loop duration初期値は120秒、最大3600秒。
-- observe interval初期値は1秒。
-- iteration内API失敗はログ出力後に次loop継続。
-- cron、WebSocket、KO確定、履歴collection、保存先ID変更は未実装。
-
-## Important Files
-
-- `Handoff.md`
-- `README.md`
-- `.env.example`
-- `.github/workflows/phase4-observe-loop.yml`
-- `src/app/config.ts`
-- `src/app/main.ts`
-- `src/app/observeLoop.ts`
-- `src/app/phase1ScopeTest.ts`
-- `src/koo/castleObservationDiff.ts`
-- `src/koo/persistDecision.ts`
-- `src/koo/activeGuildExtractor.ts`
-
-## Remaining Tasks
-
-1. Phase4 workflowをGitHub Actionsで手動実行する。
-2. Actionsログで複数iteration、skip/saveログ、duration到達終了を確認する。
-3. Firestore `koObserverViews/phase1_scope_test` の `phase3`, `activeGuilds`, `updatedAt` を確認する。
-4. 必要ならdurationを300秒で再確認する。
-5. 次Phaseで本番寄りIDや長時間運用方針を検討する。
+- `phase5-ko-observe-loop` mode追加。
+- `/gvg` WebSocket接続、guild battle購読payload送信、binary payload parseを追加。
+- castle status messageから以下を取得:
+  - castleId
+  - defenderGuildId
+  - attackerGuildId
+  - defensePartyCount
+  - attackPartyCount
+  - lastWinPartyKnockOutCount
+- KO推定状態機械を追加。
+  - `attributionMode`
+  - `unknownVictimKo`
+  - `pendingUnknownInitialKo`
+  - `suspiciousSwitch`
+  - 30秒checkpoint slot
+- mode確定条件は「推定被KO累計が6を超えた時点」。
+- `unknownVictimKo` と `suspiciousSwitch` は内部メモリのみ。Firestoreには保存しない。
+- 起動時処理を追加。
+  - `koObserverRuns/castleKoDetails` をクリア
+  - `koObserverViews/guildKoTotals` をクリア
+  - `koObserverRuns/meta` に `lastStartedAt` を保存
+- Firestore保存処理を追加。
+  - KOO内部管理: `koObserverRuns/castleKoDetails/{castleId}`
+  - GBM参照用: `koObserverViews/guildKoTotals/{guildId}`
+  - 起動情報: `koObserverRuns/meta`
+- `koObserverViews/guildKoTotals/{guildId}` はドキュメントIDをguildIdとして使い、本文に `guildId` フィールドを保存しない。
+- READMEと `.env.example` をPhase5手動実行前提で更新。
 
 ## Known Issues
 
-- GitHub Actions上のPhase4実行は未確認。
-- Firestore実環境でのPhase4連続更新挙動は未確認。
-- リポジトリ内にFirebaseサービスアカウントJSONらしきファイルが存在するため扱い注意。
+- Phase5は実WebSocket接続での手動実行が未確認。
+- Firestore実環境での起動時クリア、`lastStartedAt` 保存、castle detail / guild total保存は未確認。
+- 攻守切り替わり時に防衛数/侵攻数が入れ替わるかは未確認。
+- KO数が0へ戻るか、2〜5など中途半端に下がるかは未確認。
+- 21:15〜21:30頃のpartyCount追加とKO同時発生頻度は未確認。
+- `unknownVictimKo` と `suspiciousSwitch` の発生頻度は実ログ確認が必要。
+- `suspiciousSwitch` 補正、unknown救済、heartbeat、日跨ぎ履歴、GBM表示は未実装。
+
+## Next Recommended Actions
+
+1. `git status --short` を確認する。
+2. 以下の品質確認を再実行する。
+   - `npm.cmd run test`
+   - `npm.cmd run typecheck`
+   - `npm.cmd run build`
+3. Phase5を短時間で手動実行する。
+   ```powershell
+   $env:KOO_MODE = "phase5-ko-observe-loop"
+   $env:KOO_WORLD_ID = "1001"
+   $env:KOO_OBSERVE_DURATION_SECONDS = "120"
+   npm.cmd run start
+   ```
+4. Firestoreで以下を確認する。
+   - `koObserverRuns/meta.lastStartedAt`
+   - `koObserverRuns/castleKoDetails`
+   - `koObserverViews/guildKoTotals`
+5. 実ログで以下を確認する。
+   - WebSocket接続とpayload受信
+   - castle saveログ
+   - guild totals saveログ
+   - unknown / suspicious の発生傾向
+6. Phase6ではGBM側表示、heartbeat、実ログに基づく補正要否を検討する。
+
+## Files of Interest
+
+- `src/app/config.ts`
+- `src/app/main.ts`
+- `src/app/phase5KoObserveLoop.ts`
+- `src/mentemori/realtimeClient.ts`
+- `src/mentemori/realtimeParser.ts`
+- `src/mentemori/streamId.ts`
+- `src/koo/koAttribution.ts`
+- `src/firestore/koObserverKoRepository.ts`
+- `src/koo/koAttribution.test.ts`
+- `src/mentemori/realtimeParser.test.ts`
+- `src/firestore/koObserverKoRepository.test.ts`
+- `README.md`
+- `.env.example`
 
 ## Validation Status
 
 - `npm.cmd run test`: 成功
 - `npm.cmd run typecheck`: 成功
 - `npm.cmd run build`: 成功
-- `git diff --check`: 問題なし
-- `git status --short`: クリーン（Phase4コミット直後）
-
-## Next Session Start
-
-1. `git status --short` を確認する。
-2. 必要なら最新コミット `a15f35a` の差分を確認する。
-3. GitHubへpushされていなければpush方針を確認する。
-4. Phase4 workflowを手動実行し、ActionsログとFirestore保存結果を確認する。
+- `git diff --check`: 成功
+- `git status --short`: Phase5変更ファイルのみ

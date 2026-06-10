@@ -10,7 +10,11 @@ export type AppConfig = {
   observeIntervalSeconds: number;
 };
 
-export type KooMode = "phase0-smoke-test" | "phase1-scope-test" | "phase4-observe-loop";
+export type KooMode =
+  | "phase0-smoke-test"
+  | "phase1-scope-test"
+  | "phase4-observe-loop"
+  | "phase5-ko-observe-loop";
 
 const DEFAULT_OBSERVE_DURATION_SECONDS = 120;
 const DEFAULT_OBSERVE_INTERVAL_SECONDS = 1;
@@ -26,7 +30,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const mode = loadMode(env.KOO_MODE);
   const missingKeys: string[] = REQUIRED_ENV_KEYS.filter((envKey) => !env[envKey]);
 
-  if ((mode === "phase1-scope-test" || mode === "phase4-observe-loop") && !env.KOO_WORLD_ID) {
+  if (
+    (mode === "phase1-scope-test" ||
+      mode === "phase4-observe-loop" ||
+      mode === "phase5-ko-observe-loop") &&
+    !env.KOO_WORLD_ID
+  ) {
     missingKeys.push("KOO_WORLD_ID");
   }
 
@@ -72,7 +81,8 @@ function loadMode(mode: string | undefined): KooMode {
   if (
     mode === "phase0-smoke-test" ||
     mode === "phase1-scope-test" ||
-    mode === "phase4-observe-loop"
+    mode === "phase4-observe-loop" ||
+    mode === "phase5-ko-observe-loop"
   ) {
     return mode;
   }
