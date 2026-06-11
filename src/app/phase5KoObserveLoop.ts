@@ -95,6 +95,11 @@ export async function runPhase5KoObserveLoop(
     `startup clear completed castleKoDetails=${initializeResult.deletedCastleKoDetailsCount} guildKoTotals=${initializeResult.deletedGuildKoTotalsCount}`,
   );
   logger.info(`meta lastStartedAt saved value=${startedAt.toISOString()}`);
+  if (subscriptionScope.subscriptionType === "grandBattle") {
+    const initializedCount = await writeInitialGrandBattleGuildTotals(subscriptionScope, startedAt);
+    counters.guildKoTotalsUpdateCount += initializedCount;
+    logger.info(`Grand Battle guildKoTotals initialized count=${initializedCount}`);
+  }
 
   realtimeClient.addEventListener((event) => {
     if (event.type === "opened") {
@@ -218,6 +223,25 @@ export async function runPhase5KoObserveLoop(
     await persistGuildKoTotals(firestore, writeInput);
     counters.guildKoTotalsUpdateCount += writeInput.size;
     guildTotalsDirty = false;
+  }
+
+  async function writeInitialGrandBattleGuildTotals(
+    scope: Extract<BattleSubscriptionScope, { subscriptionType: "grandBattle" }>,
+    updatedAt: Date,
+  ): Promise<number> {
+    const writeInput = new Map(
+      scope.participantGuilds.map((guild) => [
+        guild.guildId,
+        {
+          guildName: guild.guildName,
+          totalVictimKoCount: 0,
+          updatedAt,
+          sourceUpdatedAt: updatedAt,
+        },
+      ]),
+    );
+    await persistGuildKoTotals(firestore, writeInput);
+    return writeInput.size;
   }
 
   function getGuildName(rawGuildId: string | null): string | null {

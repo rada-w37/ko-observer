@@ -47,6 +47,12 @@ test("resolves Grand Battle class and block by guildId", async () => {
     worldGroupId: 12,
     classId: 2,
     blockId: 1,
+    participantGuilds: [
+      { guildId: "111111111050", guildName: "Guild A" },
+      { guildId: "222222222050", guildName: "Guild B" },
+      { guildId: "333333333050", guildName: "Guild C" },
+      { guildId: "444444444050", guildName: "Guild D" },
+    ],
   });
   assert.ok(requestedUrls.includes("https://api.mentemori.icu/wgroups"));
   assert.ok(requestedUrls.includes("https://api.mentemori.icu/wg/12/globalgvg/2/1/latest"));
@@ -156,8 +162,14 @@ function createFetchMock(options: {
         status: 200,
         data: {
           guilds:
-            hasMatch && options.matchingGuildId && !options.matchInCastle
-              ? { [options.matchingGuildId]: "Guild" }
+            hasMatch && options.matchingGuildId
+              ? {
+                  "444444444050": "Guild D",
+                  "111111111050": "Guild A",
+                  "333333333050": "Guild C",
+                  "222222222050": "Guild B",
+                  ...(options.matchInCastle ? {} : { [options.matchingGuildId]: "Guild A" }),
+                }
               : {},
           castles:
             hasMatch && options.matchingGuildId && options.matchInCastle

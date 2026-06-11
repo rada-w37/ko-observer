@@ -26,6 +26,7 @@ export type BattleSubscriptionScope =
       worldGroupId: number;
       classId: number;
       blockId: number;
+      participantGuilds: GrandBattleParticipantGuild[];
     }
   | {
       battleType: "unknown";
@@ -37,6 +38,11 @@ export type BattleSubscriptionScope =
       blockId: null;
       reason: string;
     };
+
+export type GrandBattleParticipantGuild = {
+  guildId: string;
+  guildName: string;
+};
 
 const GRAND_BATTLE_CLASS_IDS = [1, 2, 3] as const;
 const GRAND_BATTLE_BLOCK_IDS = [0, 1, 2, 3] as const;
@@ -113,6 +119,7 @@ export async function resolveBattleSubscriptionScope(
     worldGroupId,
     classId: grandBattleScope.classId,
     blockId: grandBattleScope.blockId,
+    participantGuilds: grandBattleScope.participantGuilds,
   };
 }
 
@@ -135,7 +142,11 @@ async function findGrandBattleScope(
     guildId: string;
   },
   fetchFn: FetchFunction,
-): Promise<{ classId: number; blockId: number } | null> {
+): Promise<{
+  classId: number;
+  blockId: number;
+  participantGuilds: GrandBattleParticipantGuild[];
+} | null> {
   for (const classId of GRAND_BATTLE_CLASS_IDS) {
     for (const blockId of GRAND_BATTLE_BLOCK_IDS) {
       const latest = await fetchGrandBattleLatest(
@@ -148,12 +159,30 @@ async function findGrandBattleScope(
       );
 
       if (containsGuild(latest, input.guildId)) {
-        return { classId, blockId };
+        return {
+          classId,
+          blockId,
+          participantGuilds: extractParticipantGuilds(latest),
+        };
       }
     }
   }
 
   return null;
+}
+
+function extractParticipantGuilds(latest: GrandBattleLatest): GrandBattleParticipantGuild[] {
+  return Object.entries(latest.guilds)
+    .filter(
+      (entry): entry is [string, string] =>
+        entry[0].trim().length > 0 && entry[1].trim().length > 0,
+    )
+    .sort(([leftGuildId], [rightGuildId]) => leftGuildId.localeCompare(rightGuildId))
+    .slice(0, 4)
+    .map(([guildId, guildName]) => ({
+      guildId: guildId.trim(),
+      guildName,
+    }));
 }
 
 function containsGuild(latest: GrandBattleLatest, guildId: string): boolean {
