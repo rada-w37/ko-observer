@@ -5,6 +5,9 @@ import {
   writeCastleKoDetail,
   writeGuildKoTotals,
 } from "../firestore/koObserverKoRepository.js";
+import {
+  loadMonitorGuildTargetFromGuildShares,
+} from "../firestore/guildShareRepository.js";
 import { GvgRealtimeClient } from "../mentemori/realtimeClient.js";
 import {
   parseRealtimePayload,
@@ -32,6 +35,7 @@ type Phase5KoObserveLoopDependencies = {
   writeCastleKoDetail?: typeof writeCastleKoDetail;
   writeGuildKoTotals?: typeof writeGuildKoTotals;
   resolveBattleSubscriptionScope?: typeof resolveBattleSubscriptionScope;
+  loadMonitorGuildTargetFromGuildShares?: typeof loadMonitorGuildTargetFromGuildShares;
   now?: () => Date;
   sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -44,11 +48,6 @@ export async function runPhase5KoObserveLoop(
   firestore: Firestore,
   dependencies: Phase5KoObserveLoopDependencies = {},
 ): Promise<void> {
-  if (!config.worldId) {
-    throw new Error("KOO_WORLD_ID is required for phase5-ko-observe-loop.");
-  }
-
-  const worldId = config.worldId;
   const now = dependencies.now ?? (() => new Date());
   const sleep = dependencies.sleep ?? sleepMilliseconds;
   const initializeRun =
@@ -57,6 +56,8 @@ export async function runPhase5KoObserveLoop(
   const persistGuildKoTotals = dependencies.writeGuildKoTotals ?? writeGuildKoTotals;
   const resolveSubscriptionScope =
     dependencies.resolveBattleSubscriptionScope ?? resolveBattleSubscriptionScope;
+  const loadMonitorGuildTarget =
+    dependencies.loadMonitorGuildTargetFromGuildShares ?? loadMonitorGuildTargetFromGuildShares;
   const realtimeClient = (dependencies.createRealtimeClient ?? (() => new GvgRealtimeClient()))();
   const guildNames = new Map<string, string>();
   const castleStates = new Map<number, KoCastleState>();
@@ -76,9 +77,20 @@ export async function runPhase5KoObserveLoop(
   let guildTotalsDirty = false;
   let payloadProcessing: Promise<void> = Promise.resolve();
 
+  const monitorTarget = await resolveMonitorTarget(config, firestore, loadMonitorGuildTarget);
+  if (monitorTarget.status !== "ok") {
+    logger.warn(monitorTarget.message);
+    return;
+  }
+
+  const worldId = monitorTarget.worldId;
+  logger.info(
+    `monitor target resolved source=${monitorTarget.source} worldId=${monitorTarget.worldId} guildId=${monitorTarget.guildId ?? ""} guildName=${monitorTarget.guildName ?? ""}`,
+  );
+
   const subscriptionScope = await resolveSubscriptionScope({
     worldId,
-    guildId: config.guildId,
+    guildId: monitorTarget.guildId ?? undefined,
   });
   logger.info(createScopeLogMessage("battle scope resolved", subscriptionScope));
 
@@ -251,6 +263,48 @@ export async function runPhase5KoObserveLoop(
 
     return guildNames.get(normalizeGuildId(rawGuildId, worldId)) ?? null;
   }
+}
+
+type ResolvedMonitorTarget =
+  | {
+      status: "ok";
+      source: "env" | "guildShares";
+      worldId: string;
+      guildId: string | null;
+      guildName: string | null;
+    }
+  | {
+      status: "empty" | "multiple";
+      message: string;
+    };
+
+async function resolveMonitorTarget(
+  config: AppConfig,
+  firestore: Firestore,
+  loadMonitorGuildTarget: typeof loadMonitorGuildTargetFromGuildShares,
+): Promise<ResolvedMonitorTarget> {
+  if (config.worldId) {
+    return {
+      status: "ok",
+      source: "env",
+      worldId: config.worldId,
+      guildId: config.guildId ?? null,
+      guildName: config.ownGuildName ?? null,
+    };
+  }
+
+  const guildShareTarget = await loadMonitorGuildTarget(firestore);
+  if (guildShareTarget.status !== "ok") {
+    return guildShareTarget;
+  }
+
+  return {
+    status: "ok",
+    source: "guildShares",
+    worldId: guildShareTarget.worldId,
+    guildId: guildShareTarget.guildId,
+    guildName: guildShareTarget.guildName,
+  };
 }
 
 function normalizeOptionalGuildId(guildId: string | null, worldId: string): string | null {

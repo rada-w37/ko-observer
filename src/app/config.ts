@@ -36,7 +36,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (
     (mode === "phase1-scope-test" ||
       mode === "phase4-observe-loop" ||
-      mode === "phase5-ko-observe-loop" ||
       mode === "phase6-seed-dummy-guild-ko-totals") &&
     !env.KOO_WORLD_ID
   ) {

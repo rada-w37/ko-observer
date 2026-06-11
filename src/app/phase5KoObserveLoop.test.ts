@@ -74,6 +74,93 @@ test("does not initialize guildKoTotals for Guild Battle scope", async () => {
   assert.equal(writeCount, 0);
 });
 
+test("resolves monitor target from guildShares when manual world is not set", async () => {
+  let resolvedInput: { worldId: string; guildId?: string } | null = null;
+
+  await runPhase5KoObserveLoop(createConfig({ worldId: undefined, guildId: undefined }), createFirestoreStub(), {
+    createRealtimeClient: () => createRealtimeClientStub(),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    loadMonitorGuildTargetFromGuildShares: async () => ({
+      status: "ok",
+      worldId: "1037",
+      guildId: "111111111037",
+      guildName: "Guild A",
+    }),
+    resolveBattleSubscriptionScope: async (input) => {
+      resolvedInput = input;
+      return {
+        battleType: "guildBattle",
+        subscriptionType: "guildBattle",
+        worldId: input.worldId,
+        guildId: input.guildId ?? null,
+        worldGroupId: null,
+        classId: null,
+        blockId: null,
+      };
+    },
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+  });
+
+  assert.deepEqual(resolvedInput, {
+    worldId: "1037",
+    guildId: "111111111037",
+  });
+});
+
+test("stops when guildShares has no monitor target", async () => {
+  let initialized = false;
+
+  await runPhase5KoObserveLoop(createConfig({ worldId: undefined, guildId: undefined }), createFirestoreStub(), {
+    createRealtimeClient: () => createRealtimeClientStub(),
+    initializePhase5KoObserverRun: async () => {
+      initialized = true;
+      return {
+        deletedCastleKoDetailsCount: 0,
+        deletedGuildKoTotalsCount: 0,
+      };
+    },
+    loadMonitorGuildTargetFromGuildShares: async () => ({
+      status: "empty",
+      message: "No guild configuration found.",
+    }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+  });
+
+  assert.equal(initialized, false);
+});
+
+test("stops when guildShares has multiple monitor targets", async () => {
+  let initialized = false;
+
+  await runPhase5KoObserveLoop(createConfig({ worldId: undefined, guildId: undefined }), createFirestoreStub(), {
+    createRealtimeClient: () => createRealtimeClientStub(),
+    initializePhase5KoObserverRun: async () => {
+      initialized = true;
+      return {
+        deletedCastleKoDetailsCount: 0,
+        deletedGuildKoTotalsCount: 0,
+      };
+    },
+    loadMonitorGuildTargetFromGuildShares: async () => ({
+      status: "multiple",
+      message: "Multiple guild configurations found.",
+      count: 2,
+    }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+  });
+
+  assert.equal(initialized, false);
+});
+
 type GuildKoTotalWriteInput = {
   guildName: string | null;
   totalVictimKoCount: number;
@@ -81,7 +168,7 @@ type GuildKoTotalWriteInput = {
   sourceUpdatedAt: Date;
 };
 
-function createConfig(): AppConfig {
+function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     firebaseProjectId: "project",
     firebaseClientEmail: "client@example.com",
@@ -93,6 +180,7 @@ function createConfig(): AppConfig {
     observeDurationSeconds: 1,
     observeIntervalSeconds: 1,
     seedClear: true,
+    ...overrides,
   };
 }
 

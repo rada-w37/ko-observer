@@ -49,6 +49,17 @@ test("loads phase5 KO observe loop config", () => {
   assert.equal(config.observeDurationSeconds, 60);
 });
 
+test("loads phase5 KO observe loop config without manual world for production target resolution", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase5-ko-observe-loop",
+  });
+
+  assert.equal(config.mode, "phase5-ko-observe-loop");
+  assert.equal(config.worldId, undefined);
+  assert.equal(config.guildId, undefined);
+});
+
 test("loads phase6 dummy seed config with clear default", () => {
   const config = loadConfig({
     ...baseEnv,
