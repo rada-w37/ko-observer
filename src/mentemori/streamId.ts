@@ -71,6 +71,23 @@ export function createGuildBattleSubscriptionPayload(worldId: string): Uint8Arra
   return payload;
 }
 
+export function createGrandBattleSubscriptionPayload(source: {
+  worldGroupId: number;
+  classId: number;
+  blockId: number;
+}): Uint8Array {
+  const streamId = buildGvgStreamId({
+    castleId: 0,
+    block: source.blockId,
+    worldGroupId: source.worldGroupId,
+    gvgClass: source.classId,
+    worldId: 0,
+  });
+  const payload = new Uint8Array(4);
+  new DataView(payload.buffer).setUint32(0, streamId, true);
+  return payload;
+}
+
 function assertBitRange(name: string, value: number, max: number): void {
   if (!Number.isInteger(value) || value < 0 || value > max) {
     throw new Error(`${name} must be an integer between 0 and ${max}.`);

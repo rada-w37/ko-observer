@@ -39,11 +39,13 @@ test("loads phase5 KO observe loop config", () => {
     ...baseEnv,
     KOO_MODE: "phase5-ko-observe-loop",
     KOO_WORLD_ID: "1001",
+    KOO_GUILD_ID: "111111111001",
     KOO_OBSERVE_DURATION_SECONDS: "60",
   });
 
   assert.equal(config.mode, "phase5-ko-observe-loop");
   assert.equal(config.worldId, "1001");
+  assert.equal(config.guildId, "111111111001");
   assert.equal(config.observeDurationSeconds, 60);
 });
 

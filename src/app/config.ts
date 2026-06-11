@@ -5,6 +5,7 @@ export type AppConfig = {
   mode: KooMode;
   runId: string;
   worldId?: string;
+  guildId?: string;
   ownGuildName?: string;
   observeDurationSeconds: number;
   observeIntervalSeconds: number;
@@ -71,6 +72,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     mode,
     runId: env.GITHUB_RUN_ID ?? "local",
     worldId: env.KOO_WORLD_ID,
+    guildId: env.KOO_GUILD_ID,
     ownGuildName: env.KOO_OWN_GUILD_NAME,
     observeDurationSeconds,
     observeIntervalSeconds,

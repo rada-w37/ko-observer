@@ -11,6 +11,14 @@ import {
   type RealtimePayloadBytes,
 } from "../mentemori/realtimeParser.js";
 import {
+  createGrandBattleSubscriptionPayload,
+  createGuildBattleSubscriptionPayload,
+} from "../mentemori/streamId.js";
+import {
+  resolveBattleSubscriptionScope,
+  type BattleSubscriptionScope,
+} from "../koo/battleScopeResolver.js";
+import {
   applyKoObservation,
   calculateGuildKoTotals,
   createKoCastlePublicSnapshot,
@@ -23,6 +31,7 @@ type Phase5KoObserveLoopDependencies = {
   initializePhase5KoObserverRun?: typeof initializePhase5KoObserverRun;
   writeCastleKoDetail?: typeof writeCastleKoDetail;
   writeGuildKoTotals?: typeof writeGuildKoTotals;
+  resolveBattleSubscriptionScope?: typeof resolveBattleSubscriptionScope;
   now?: () => Date;
   sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -46,14 +55,20 @@ export async function runPhase5KoObserveLoop(
     dependencies.initializePhase5KoObserverRun ?? initializePhase5KoObserverRun;
   const persistCastleKoDetail = dependencies.writeCastleKoDetail ?? writeCastleKoDetail;
   const persistGuildKoTotals = dependencies.writeGuildKoTotals ?? writeGuildKoTotals;
+  const resolveSubscriptionScope =
+    dependencies.resolveBattleSubscriptionScope ?? resolveBattleSubscriptionScope;
   const realtimeClient = (dependencies.createRealtimeClient ?? (() => new GvgRealtimeClient()))();
   const guildNames = new Map<string, string>();
   const castleStates = new Map<number, KoCastleState>();
   const startedAt = now();
   const endAtMilliseconds = startedAt.getTime() + config.observeDurationSeconds * 1000;
   const counters = {
+    websocketOpened: false,
+    subscriptionSent: false,
     websocketMessageReceivedCount: 0,
+    guildMessageCount: 0,
     parsedCastleStatusCount: 0,
+    parseErrorCount: 0,
     castleKoDetailsWriteCount: 0,
     guildKoTotalsUpdateCount: 0,
   };
@@ -61,6 +76,20 @@ export async function runPhase5KoObserveLoop(
   let guildTotalsDirty = false;
   let payloadProcessing: Promise<void> = Promise.resolve();
 
+  const subscriptionScope = await resolveSubscriptionScope({
+    worldId,
+    guildId: config.guildId,
+  });
+  logger.info(createScopeLogMessage("battle scope resolved", subscriptionScope));
+
+  if (subscriptionScope.subscriptionType === "none") {
+    logger.warn(`Phase5 subscription skipped reason=${subscriptionScope.reason}`);
+    logSummary(subscriptionScope, counters);
+    logger.info("Phase5 KO observe loop completed.");
+    return;
+  }
+
+  const subscriptionPayload = createSubscriptionPayload(subscriptionScope);
   const initializeResult = await initializeRun(firestore, startedAt);
   logger.info(
     `startup clear completed castleKoDetails=${initializeResult.deletedCastleKoDetailsCount} guildKoTotals=${initializeResult.deletedGuildKoTotalsCount}`,
@@ -69,11 +98,13 @@ export async function runPhase5KoObserveLoop(
 
   realtimeClient.addEventListener((event) => {
     if (event.type === "opened") {
+      counters.websocketOpened = true;
       logger.info("websocket opened");
       return;
     }
 
     if (event.type === "subscriptionSent") {
+      counters.subscriptionSent = true;
       logger.info("subscription sent");
       return;
     }
@@ -101,8 +132,8 @@ export async function runPhase5KoObserveLoop(
   logger.info(
     `Phase5 KO observe loop started durationSeconds=${config.observeDurationSeconds}`,
   );
-  logger.info(`websocket connecting worldId=${worldId}`);
-  await realtimeClient.connect(worldId);
+  logger.info(createScopeLogMessage("websocket connecting", subscriptionScope));
+  await realtimeClient.connect({ payload: subscriptionPayload });
 
   try {
     while (now().getTime() < endAtMilliseconds) {
@@ -123,23 +154,21 @@ export async function runPhase5KoObserveLoop(
     realtimeClient.disconnect("duration reached");
   }
 
-  logger.info(
-    `Phase5 summary websocket message received count=${counters.websocketMessageReceivedCount}`,
-  );
-  logger.info(`Phase5 summary parsed castle status count=${counters.parsedCastleStatusCount}`);
-  logger.info(`Phase5 summary castleKoDetails write count=${counters.castleKoDetailsWriteCount}`);
-  logger.info(`Phase5 summary guildKoTotals update count=${counters.guildKoTotalsUpdateCount}`);
+  logSummary(subscriptionScope, counters);
   logger.info("Phase5 KO observe loop completed.");
 
   async function handlePayload(payload: RealtimePayloadBytes, receivedAt: Date): Promise<void> {
     const parserResult = parseRealtimePayload(payload);
     if (parserResult.status === "error") {
+      counters.parseErrorCount += 1;
       logger.warn(`Phase5 realtime parser error: ${parserResult.error.message}`);
     }
 
+    const guildMessages = parserResult.messages.filter((message) => message.type === "guild");
     const castleStatusMessages = parserResult.messages.filter(
       (message) => message.type === "castleStatus",
     );
+    counters.guildMessageCount += guildMessages.length;
     counters.parsedCastleStatusCount += castleStatusMessages.length;
 
     for (const message of parserResult.messages) {
@@ -202,6 +231,70 @@ export async function runPhase5KoObserveLoop(
 
 function normalizeOptionalGuildId(guildId: string | null, worldId: string): string | null {
   return guildId ? normalizeGuildId(guildId, worldId) : null;
+}
+
+function createSubscriptionPayload(subscriptionScope: BattleSubscriptionScope): Uint8Array {
+  if (subscriptionScope.subscriptionType === "guildBattle") {
+    return createGuildBattleSubscriptionPayload(subscriptionScope.worldId);
+  }
+
+  if (subscriptionScope.subscriptionType === "grandBattle") {
+    return createGrandBattleSubscriptionPayload({
+      worldGroupId: subscriptionScope.worldGroupId,
+      classId: subscriptionScope.classId,
+      blockId: subscriptionScope.blockId,
+    });
+  }
+
+  throw new Error("Cannot create subscription payload for unresolved battle scope.");
+}
+
+function createScopeLogMessage(prefix: string, subscriptionScope: BattleSubscriptionScope): string {
+  return [
+    prefix,
+    `battleType=${subscriptionScope.battleType}`,
+    `worldId=${subscriptionScope.worldId}`,
+    `guildId=${subscriptionScope.guildId ?? ""}`,
+    `worldGroupId=${subscriptionScope.worldGroupId ?? ""}`,
+    `classId=${subscriptionScope.classId ?? ""}`,
+    `blockId=${subscriptionScope.blockId ?? ""}`,
+    `subscriptionType=${subscriptionScope.subscriptionType}`,
+  ].join(" ");
+}
+
+function logSummary(
+  subscriptionScope: BattleSubscriptionScope,
+  counters: {
+    websocketOpened: boolean;
+    subscriptionSent: boolean;
+    websocketMessageReceivedCount: number;
+    guildMessageCount: number;
+    parsedCastleStatusCount: number;
+    parseErrorCount: number;
+    castleKoDetailsWriteCount: number;
+    guildKoTotalsUpdateCount: number;
+  },
+): void {
+  logger.info(
+    [
+      "Phase5 summary",
+      `battleType=${subscriptionScope.battleType}`,
+      `worldId=${subscriptionScope.worldId}`,
+      `guildId=${subscriptionScope.guildId ?? ""}`,
+      `worldGroupId=${subscriptionScope.worldGroupId ?? ""}`,
+      `classId=${subscriptionScope.classId ?? ""}`,
+      `blockId=${subscriptionScope.blockId ?? ""}`,
+      `subscriptionType=${subscriptionScope.subscriptionType}`,
+      `websocketOpened=${counters.websocketOpened}`,
+      `subscriptionSent=${counters.subscriptionSent}`,
+      `messagesReceived=${counters.websocketMessageReceivedCount}`,
+      `castleStatusMessages=${counters.parsedCastleStatusCount}`,
+      `guildMessages=${counters.guildMessageCount}`,
+      `parseErrors=${counters.parseErrorCount}`,
+      `castleWrites=${counters.castleKoDetailsWriteCount}`,
+      `guildTotalWrites=${counters.guildKoTotalsUpdateCount}`,
+    ].join(" "),
+  );
 }
 
 function normalizeGuildId(guildId: string, worldId: string): string {

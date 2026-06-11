@@ -2,130 +2,61 @@
 
 ## Current Goal
 
-KOO Phase5のWebSocket入力KO推定observerを実装済み。次は手動実行で実WebSocketログとFirestore保存結果を確認する。
-Phase6のGBM連携確認用に、dummy guild KO totals投入modeと手動workflowを追加済み。
+KOO Phase5.5で、Phase5 KO監視をGuild Battle / Grand Battle両対応にする。実装は完了。次は実WebSocketとFirestore保存結果を手動確認する。
 
 ## Current Status
 
-- TypeScript + Node.js 22 CLI基盤は実装済み。
-- 既存 `phase4-observe-loop` は維持済み。Phase5では置換していない。
-- Phase5用に `phase5-ko-observe-loop` modeを追加済み。
-- Phase5は `wss://api.mentemori.icu/gvg` WebSocketを入力にする。
-- GBMの既存WebSocket parser / streamId設計をKOO向けに移植済み。
-- Node 22標準の `WebSocket` を使うため、追加npm依存はなし。
-- Phase5 smoke test用GitHub Actions workflowを追加済み。`workflow_dispatch` のみで、scheduleは未追加。
-- Phase6 dummy seed用GitHub Actions workflowを追加済み。`workflow_dispatch` のみで、scheduleは未追加。
+- `phase5-ko-observe-loop` は起動時にbattle scopeを解決する。
+- Guild Battle開催中は既存の `worldId` ベース `/gvg` 購読を使う。
+- Guild Battle非開催時は `KOO_GUILD_ID` を使い、Grand Battleのclass/blockを探索する。
+- Grand Battle探索は `wgroups` で `worldGroupId` を解決し、class `1,2,3` × block `0,1,2,3` の `globalgvg/latest` から所属guildIdを探す。
+- Grand Battle購読は `worldGroupId / classId / blockId` ベースで、`worldId=0` のstreamIdを送る。
+- どちらも解決できない場合、Guild Battle streamへフォールバックせず明示ログで終了する。
+- Phase4、Phase6 dummy seed、KO推定、Firestore保存形式は既存維持。
 
-## Completed
+## Architecture
 
-- `phase5-ko-observe-loop` mode追加。
-- `/gvg` WebSocket接続、guild battle購読payload送信、binary payload parseを追加。
-- castle status messageから以下を取得:
-  - castleId
-  - defenderGuildId
-  - attackerGuildId
-  - defensePartyCount
-  - attackPartyCount
-  - lastWinPartyKnockOutCount
-- KO推定状態機械を追加。
-  - `attributionMode`
-  - `unknownVictimKo`
-  - `pendingUnknownInitialKo`
-  - `suspiciousSwitch`
-  - 30秒checkpoint slot
-- mode確定条件は「推定被KO累計が6を超えた時点」。
-- `unknownVictimKo` と `suspiciousSwitch` は内部メモリのみ。Firestoreには保存しない。
-- 起動時処理を追加。
-  - `koObserverRuns/castleKoDetails` をクリア
-  - `koObserverViews/guildKoTotals` をクリア
-  - `koObserverRuns/meta` に `lastStartedAt` を保存
-- Firestore保存処理を追加。
-  - KOO内部管理: `koObserverRuns/castleKoDetails/{castleId}`
-  - GBM参照用: `koObserverViews/guildKoTotals/{guildId}`
-  - 起動情報: `koObserverRuns/meta`
-- `koObserverViews/guildKoTotals/{guildId}` はドキュメントIDをguildIdとして使い、本文に `guildId` フィールドを保存しない。
-- READMEと `.env.example` をPhase5手動実行前提で更新。
-- Phase5 smoke test用workflow `.github/workflows/phase5-ko-observe-loop.yml` を追加。
-  - `KOO_MODE=phase5-ko-observe-loop`
-  - `world_id` inputを `KOO_WORLD_ID` に渡す
-  - `duration_seconds` inputを `KOO_OBSERVE_DURATION_SECONDS` に渡す
-  - default `world_id=1001`
-  - default `duration_seconds=60`
-  - scheduleなし
-- Phase6 dummy seed mode `phase6-seed-dummy-guild-ko-totals` を追加。
-  - `KOO_WORLD_ID` の `localgvg/latest` を実行時に取得
-  - 実在するguildId / guildNameから最大5件を選ぶ
-  - KO数のみダミー値
-  - `koObserverViews/guildKoTotals/{guildId}` に保存
-  - 保存フィールドは `guildName`, `totalVictimKoCount`, `updatedAt`
-  - `koObserverRuns/meta.lastStartedAt` も更新
-  - `KOO_SEED_CLEAR=true` の場合は `koObserverViews/guildKoTotals` をクリア
-  - `koObserverRuns/castleKoDetails` は触らない
-- Phase6 dummy seed用workflow `.github/workflows/phase6-seed-dummy-guild-ko-totals.yml` を追加。
-  - default `world_id=1037`
-  - default `clear=true`
-  - scheduleなし
+- scope解決: `src/koo/battleScopeResolver.ts`
+- Grand Battle REST: `src/mentemori/grandBattleApiClient.ts`
+- streamId/payload: `src/mentemori/streamId.ts`
+- WebSocket接続: `src/mentemori/realtimeClient.ts`
+- Phase5 loop: `src/app/phase5KoObserveLoop.ts`
+- GitHub Actions: `.github/workflows/phase5-ko-observe-loop.yml`
+
+## Decisions
+
+- `KOO_GUILD_ID` はGrand Battle探索時のみ必須。Guild Battle開催中は未指定でも既存挙動を維持する。
+- Grand Battle候補は `data.guilds` のキー、または `data.castles[].GuildId / AttackerGuildId` に所属guildIdが含まれるかで判定する。
+- 未解決時はFirestore初期化やWebSocket購読を行わず終了する。
+- summaryログにbattle scope、購読状態、message/parse/write countersをまとめる。
+
+## Important Files
+
+- `src/app/config.ts`
+- `src/app/phase5KoObserveLoop.ts`
+- `src/koo/battleScopeResolver.ts`
+- `src/mentemori/grandBattleApiClient.ts`
+- `src/mentemori/streamId.ts`
+- `src/mentemori/realtimeClient.ts`
+- `src/koo/koAttribution.ts`
+- `src/firestore/koObserverKoRepository.ts`
+- `.github/workflows/phase5-ko-observe-loop.yml`
+- `README.md`
+- `.env.example`
+
+## Remaining Tasks
+
+1. Grand Battle開催日にActionsから `world_id` + `guild_id` で短時間実行する。
+2. summaryログで `battleType=grandBattle`, `subscriptionType=grandBattle`, `worldGroupId`, `classId`, `blockId` を確認する。
+3. WebSocket payload受信、castle status数、guild message数、parse error数を確認する。
+4. Firestoreで `koObserverRuns/meta.lastStartedAt`, `koObserverRuns/castleKoDetails`, `koObserverViews/guildKoTotals` を確認する。
 
 ## Known Issues
 
-- Phase5は実WebSocket接続でのGitHub Actions手動実行が未確認。
-- Firestore実環境での起動時クリア、`lastStartedAt` 保存、castle detail / guild total保存は未確認。
-- Phase6 dummy seedのGitHub Actions手動実行とFirestore保存結果は未確認。
-- 攻守切り替わり時に防衛数/侵攻数が入れ替わるかは未確認。
-- KO数が0へ戻るか、2〜5など中途半端に下がるかは未確認。
-- 21:15〜21:30頃のpartyCount追加とKO同時発生頻度は未確認。
-- `unknownVictimKo` と `suspiciousSwitch` の発生頻度は実ログ確認が必要。
-- `suspiciousSwitch` 補正、unknown救済、heartbeat、日跨ぎ履歴、GBM表示は未実装。
-
-## Next Recommended Actions
-
-1. `git status --short` を確認する。
-2. 以下の品質確認を再実行する。
-   - `npm.cmd run test`
-   - `npm.cmd run typecheck`
-   - `npm.cmd run build`
-3. Phase5をGitHub Actionsから短時間で手動実行する。
-   - workflow: `.github/workflows/phase5-ko-observe-loop.yml`
-   - `world_id`: `1001`
-   - `duration_seconds`: `60`
-4. ローカルで手動実行する場合は以下を使う。
-   ```powershell
-   $env:KOO_MODE = "phase5-ko-observe-loop"
-   $env:KOO_WORLD_ID = "1001"
-   $env:KOO_OBSERVE_DURATION_SECONDS = "120"
-   npm.cmd run start
-   ```
-5. Firestoreで以下を確認する。
-   - `koObserverRuns/meta.lastStartedAt`
-   - `koObserverRuns/castleKoDetails`
-   - `koObserverViews/guildKoTotals`
-6. 実ログで以下を確認する。
-   - WebSocket接続とpayload受信
-   - castle saveログ
-   - guild totals saveログ
-   - unknown / suspicious の発生傾向
-7. Phase6ではGBM側表示、heartbeat、実ログに基づく補正要否を検討する。
-8. Phase6 dummy seed workflowを手動実行し、GBM側から `koObserverViews/guildKoTotals` を購読・表示できるか確認する。
-
-## Files of Interest
-
-- `src/app/config.ts`
-- `src/app/main.ts`
-- `src/app/phase5KoObserveLoop.ts`
-- `src/mentemori/realtimeClient.ts`
-- `src/mentemori/realtimeParser.ts`
-- `src/mentemori/streamId.ts`
-- `src/koo/koAttribution.ts`
-- `src/firestore/koObserverKoRepository.ts`
-- `src/koo/koAttribution.test.ts`
-- `src/mentemori/realtimeParser.test.ts`
-- `src/firestore/koObserverKoRepository.test.ts`
-- `.github/workflows/phase5-ko-observe-loop.yml`
-- `src/app/phase6SeedDummyGuildKoTotals.ts`
-- `src/app/phase6SeedDummyGuildKoTotals.test.ts`
-- `.github/workflows/phase6-seed-dummy-guild-ko-totals.yml`
-- `README.md`
-- `.env.example`
+- Grand Battle実WebSocketでcastle statusが流れることは未確認。
+- Grand Battle実環境でのFirestore保存結果は未確認。
+- 他world所属guildIdのrealtime guild name補正は実ログで確認が必要。
+- `unknownVictimKo` 救済、`suspiciousSwitch` 補正、heartbeat、日跨ぎ履歴、GBM表示は未実装。
 
 ## Validation Status
 
@@ -133,4 +64,12 @@ Phase6のGBM連携確認用に、dummy guild KO totals投入modeと手動workflo
 - `npm.cmd run typecheck`: 成功
 - `npm.cmd run build`: 成功
 - `git diff --check`: 成功
-- `git status --short`: Phase6 dummy seed変更ファイルのみ
+- `git status --short`: Phase5.5変更ファイルのみ
+
+## Next Session Start
+
+1. `git status --short`
+2. `npm.cmd run test`
+3. `npm.cmd run typecheck`
+4. `npm.cmd run build`
+5. Actions `Phase5 KO Observe Loop` を `world_id` + `guild_id` で手動実行

@@ -7,6 +7,10 @@ on:
         description: "mentemori API world_id"
         required: true
         default: "1001"
+      guild_id:
+        description: "Grand Battle guild_id. Leave empty for Guild Battle."
+        required: false
+        default: ""
       duration_seconds:
         description: "Observe duration seconds"
         required: true
@@ -43,6 +47,7 @@ jobs:
         env:
           KOO_MODE: phase5-ko-observe-loop
           KOO_WORLD_ID: ${{ inputs.world_id }}
+          KOO_GUILD_ID: ${{ inputs.guild_id }}
           KOO_OBSERVE_DURATION_SECONDS: ${{ inputs.duration_seconds }}
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}

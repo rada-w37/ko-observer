@@ -35,6 +35,10 @@ export type GvgRealtimeClientOptions = {
   createWebSocket?: WebSocketFactory;
 };
 
+export type GvgRealtimeSubscription = {
+  payload: Uint8Array;
+};
+
 const WEBSOCKET_OPEN = 1;
 
 export class GvgRealtimeClient {
@@ -58,7 +62,7 @@ export class GvgRealtimeClient {
       });
   }
 
-  connect(worldId: string): Promise<void> {
+  connect(worldIdOrSubscription: string | GvgRealtimeSubscription): Promise<void> {
     const socket = this.createWebSocket(this.endpoint);
     socket.binaryType = "arraybuffer";
     this.socket = socket;
@@ -66,7 +70,11 @@ export class GvgRealtimeClient {
     return new Promise((resolve, reject) => {
       socket.addEventListener("open", () => {
         this.emit({ type: "opened" });
-        socket.send(createGuildBattleSubscriptionPayload(worldId));
+        socket.send(
+          typeof worldIdOrSubscription === "string"
+            ? createGuildBattleSubscriptionPayload(worldIdOrSubscription)
+            : worldIdOrSubscription.payload,
+        );
         this.emit({ type: "subscriptionSent" });
         this.emit({ type: "connected" });
         resolve();
