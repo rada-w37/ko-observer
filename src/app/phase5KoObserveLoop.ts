@@ -101,6 +101,8 @@ export async function runPhase5KoObserveLoop(
     return;
   }
 
+  const resolveRealtimeGuildId = createRealtimeGuildIdResolver(subscriptionScope);
+  seedParticipantGuildNames(subscriptionScope);
   const subscriptionPayload = createSubscriptionPayload(subscriptionScope);
   const initializeResult = await initializeRun(firestore, startedAt);
   logger.info(
@@ -110,7 +112,12 @@ export async function runPhase5KoObserveLoop(
   if (subscriptionScope.subscriptionType === "grandBattle") {
     const initializedCount = await writeInitialGrandBattleGuildTotals(subscriptionScope, startedAt);
     counters.guildKoTotalsUpdateCount += initializedCount;
-    logger.info(`Grand Battle guildKoTotals initialized count=${initializedCount}`);
+    logger.info(
+      [
+        `Grand Battle guildKoTotals initialized count=${initializedCount}`,
+        `guildIds=${subscriptionScope.participantGuilds.map((guild) => guild.guildId).join(",")}`,
+      ].join(" "),
+    );
   }
 
   realtimeClient.addEventListener((event) => {
@@ -190,7 +197,7 @@ export async function runPhase5KoObserveLoop(
 
     for (const message of parserResult.messages) {
       if (message.type === "guild" && message.guildId && message.guildName) {
-        guildNames.set(normalizeGuildId(message.guildId, worldId), message.guildName);
+        guildNames.set(resolveRealtimeGuildId(message.guildId), message.guildName);
       }
 
       if (message.type !== "castleStatus") {
@@ -199,9 +206,9 @@ export async function runPhase5KoObserveLoop(
 
       const result = applyKoObservation(castleStates.get(message.castleId), {
         castleId: message.castleId,
-        defenderGuildId: normalizeOptionalGuildId(message.guildId, worldId),
+        defenderGuildId: normalizeOptionalGuildId(message.guildId),
         defenderGuildName: getGuildName(message.guildId),
-        attackerGuildId: normalizeOptionalGuildId(message.attackerGuildId, worldId),
+        attackerGuildId: normalizeOptionalGuildId(message.attackerGuildId),
         attackerGuildName: getGuildName(message.attackerGuildId),
         defensePartyCount: message.defensePartyCount,
         attackPartyCount: message.attackPartyCount,
@@ -232,6 +239,9 @@ export async function runPhase5KoObserveLoop(
         },
       ]),
     );
+    logger.info(
+      `guildKoTotals saving count=${writeInput.size} guildIds=${[...writeInput.keys()].join(",")}`,
+    );
     await persistGuildKoTotals(firestore, writeInput);
     counters.guildKoTotalsUpdateCount += writeInput.size;
     guildTotalsDirty = false;
@@ -261,7 +271,21 @@ export async function runPhase5KoObserveLoop(
       return null;
     }
 
-    return guildNames.get(normalizeGuildId(rawGuildId, worldId)) ?? null;
+    return guildNames.get(resolveRealtimeGuildId(rawGuildId)) ?? null;
+  }
+
+  function normalizeOptionalGuildId(guildId: string | null): string | null {
+    return guildId ? resolveRealtimeGuildId(guildId) : null;
+  }
+
+  function seedParticipantGuildNames(scope: BattleSubscriptionScope): void {
+    if (scope.subscriptionType !== "grandBattle") {
+      return;
+    }
+
+    for (const guild of scope.participantGuilds) {
+      guildNames.set(guild.guildId, guild.guildName);
+    }
   }
 }
 
@@ -305,10 +329,6 @@ async function resolveMonitorTarget(
     guildId: guildShareTarget.guildId,
     guildName: guildShareTarget.guildName,
   };
-}
-
-function normalizeOptionalGuildId(guildId: string | null, worldId: string): string | null {
-  return guildId ? normalizeGuildId(guildId, worldId) : null;
 }
 
 function createSubscriptionPayload(subscriptionScope: BattleSubscriptionScope): Uint8Array {
@@ -383,6 +403,32 @@ function normalizeGuildId(guildId: string, worldId: string): string {
   }
 
   return `${rawGuildId}${String(numericWorldId % 1000).padStart(3, "0")}`;
+}
+
+function createRealtimeGuildIdResolver(
+  subscriptionScope: BattleSubscriptionScope,
+): (guildId: string) => string {
+  if (subscriptionScope.subscriptionType !== "grandBattle") {
+    return (guildId) => normalizeGuildId(guildId, subscriptionScope.worldId);
+  }
+
+  const fullGuildIdByRealtimeGuildId = new Map<string, string>();
+  for (const participantGuild of subscriptionScope.participantGuilds) {
+    fullGuildIdByRealtimeGuildId.set(participantGuild.guildId, participantGuild.guildId);
+    fullGuildIdByRealtimeGuildId.set(
+      stripWorldSuffix(participantGuild.guildId),
+      participantGuild.guildId,
+    );
+  }
+
+  return (guildId) => {
+    const rawGuildId = guildId.trim();
+    return fullGuildIdByRealtimeGuildId.get(rawGuildId) ?? rawGuildId;
+  };
+}
+
+function stripWorldSuffix(guildId: string): string {
+  return guildId.length > 3 ? guildId.slice(0, -3) : guildId;
 }
 
 function sleepMilliseconds(milliseconds: number): Promise<void> {

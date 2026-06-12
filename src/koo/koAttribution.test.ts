@@ -122,6 +122,26 @@ test("creates checkpoint save only for castles with KO changes and keeps max tot
   assert.equal(totals.get("1001001")?.totalVictimKoCount, 7);
 });
 
+test("sums victim KO by guildId across sides and castles", () => {
+  const totals = calculateGuildKoTotals([
+    createState({
+      castleId: 1,
+      defenderGuildId: "1001001",
+      defenderGuildName: "Guild A",
+      defenseVictimKoTotal: 7,
+    }),
+    createState({
+      castleId: 2,
+      attackerGuildId: "1001001",
+      attackerGuildName: "Guild A",
+      attackVictimKoTotal: 5,
+    }),
+  ]);
+
+  assert.equal(totals.size, 1);
+  assert.equal(totals.get("1001001")?.totalVictimKoCount, 12);
+});
+
 function createObservation(overrides: Partial<KoCastleObservation> = {}): KoCastleObservation {
   return {
     castleId: 1,

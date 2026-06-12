@@ -4,6 +4,7 @@ import type { Firestore } from "firebase-admin/firestore";
 import type { GvgRealtimeClient } from "../mentemori/realtimeClient.js";
 import { runPhase5KoObserveLoop } from "./phase5KoObserveLoop.js";
 import type { AppConfig } from "./config.js";
+import { buildGvgStreamId } from "../mentemori/streamId.js";
 
 test("initializes Grand Battle participant guildKoTotals with zero KO", async () => {
   const writtenTotals: Array<Map<string, GuildKoTotalWriteInput>> = [];
@@ -72,6 +73,49 @@ test("does not initialize guildKoTotals for Guild Battle scope", async () => {
   });
 
   assert.equal(writeCount, 0);
+});
+
+test("aggregates Grand Battle realtime short guildId into participant guildId", async () => {
+  const writtenTotals: Array<Map<string, GuildKoTotalWriteInput>> = [];
+
+  await runPhase5KoObserveLoop(createConfig(), createFirestoreStub(), {
+    createRealtimeClient: () =>
+      createRealtimeClientStub([
+        createCastleStatusBytes({ guildId: 110796857, koCount: 0, defensePartyCount: 10 }),
+        createCastleStatusBytes({ guildId: 110796857, koCount: 7, defensePartyCount: 3 }),
+      ]),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "grandBattle",
+      subscriptionType: "grandBattle",
+      worldId: "1037",
+      guildId: "110796857037",
+      worldGroupId: 12,
+      classId: 3,
+      blockId: 2,
+      participantGuilds: [
+        { guildId: "110796857020", guildName: "Guild A" },
+        { guildId: "562434163034", guildName: "Guild B" },
+        { guildId: "576802057037", guildName: "Guild C" },
+        { guildId: "844121064012", guildName: "Guild D" },
+      ],
+    }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async (_firestore, guildKoTotals) => {
+      writtenTotals.push(new Map(guildKoTotals));
+    },
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  assert.equal(writtenTotals.length, 2);
+  assert.equal(writtenTotals[0]?.has("110796857020"), true);
+  assert.equal(writtenTotals[1]?.has("110796857020"), true);
+  assert.equal(writtenTotals[1]?.has("110796857037"), false);
+  assert.equal(writtenTotals[1]?.get("110796857020")?.totalVictimKoCount, 7);
 });
 
 test("resolves monitor target from guildShares when manual world is not set", async () => {
@@ -198,10 +242,69 @@ function createFirestoreStub(): Firestore {
   return {} as Firestore;
 }
 
-function createRealtimeClientStub(): GvgRealtimeClient {
+function createRealtimeClientStub(payloads: number[][] = []): GvgRealtimeClient {
+  type TestRealtimeEvent =
+    | { type: "opened" }
+    | { type: "subscriptionSent" }
+    | { type: "payloadReceived"; payload: number[] }
+    | { type: "disconnected"; reason?: string };
+  let listener: ((event: TestRealtimeEvent) => void) | null = null;
+
   return {
-    addEventListener: () => () => {},
-    connect: async () => {},
-    disconnect: () => {},
+    addEventListener: (eventListener: typeof listener) => {
+      listener = eventListener;
+      return () => {};
+    },
+    connect: async () => {
+      listener?.({ type: "opened" });
+      listener?.({ type: "subscriptionSent" });
+      for (const payload of payloads) {
+        listener?.({ type: "payloadReceived", payload });
+      }
+    },
+    disconnect: (reason?: string) => {
+      listener?.({ type: "disconnected", reason });
+    },
   } as unknown as GvgRealtimeClient;
+}
+
+function createCastleStatusBytes(
+  overrides: Partial<{
+    guildId: number;
+    attackerGuildId: number;
+    defensePartyCount: number;
+    attackPartyCount: number;
+    koCount: number;
+  }> = {},
+): number[] {
+  const castleStreamId = buildGvgStreamId({
+    castleId: 1,
+    block: 2,
+    worldGroupId: 12,
+    gvgClass: 3,
+    worldId: 0,
+  });
+  return [
+    ...writeUint32(castleStreamId),
+    ...writeUint32(overrides.guildId ?? 110796857),
+    ...writeUint32(overrides.attackerGuildId ?? 0),
+    ...writeUint32(0),
+    ...writeUint16(overrides.defensePartyCount ?? 10),
+    ...writeUint16(overrides.attackPartyCount ?? 0),
+    1,
+    0,
+    ...writeUint16(overrides.koCount ?? 0),
+  ];
+}
+
+function writeUint32(value: number): number[] {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value, true);
+  return [...bytes];
+}
+
+function writeUint16(value: number): number[] {
+  const bytes = new Uint8Array(2);
+  new DataView(bytes.buffer).setUint16(0, value, true);
+  return [...bytes];
 }
