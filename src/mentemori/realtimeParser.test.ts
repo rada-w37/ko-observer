@@ -39,6 +39,7 @@ test("parses castle status bytes using little-endian offsets", () => {
       attackerGuildId: "123456789",
       defensePartyCount: 513,
       attackPartyCount: 258,
+      gvgCastleState: 1,
       lastWinPartyKnockOutCount: 1027,
     },
   ]);

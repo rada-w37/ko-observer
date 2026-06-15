@@ -12,6 +12,7 @@ export type RawCastleStatusMessage = {
   attackerGuildId: string | null;
   defensePartyCount: number;
   attackPartyCount: number;
+  gvgCastleState: number;
   lastWinPartyKnockOutCount: number;
 };
 
@@ -140,6 +141,7 @@ function parseCastleStatusMessage(
       attackerGuildId: normalizeGuildId(view.getUint32(offset + 8, true)),
       defensePartyCount: view.getUint16(offset + 16, true),
       attackPartyCount: view.getUint16(offset + 18, true),
+      gvgCastleState: view.getUint8(offset + 20),
       lastWinPartyKnockOutCount: view.getUint16(offset + 22, true),
     },
   };

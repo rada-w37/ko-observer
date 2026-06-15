@@ -1,4 +1,8 @@
 export const logger = {
+  debug(message: string): void {
+    console.log(`[DEBUG] ${message}`);
+  },
+
   info(message: string): void {
     console.log(`[INFO] ${message}`);
   },
