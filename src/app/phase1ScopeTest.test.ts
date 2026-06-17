@@ -17,6 +17,8 @@ const baseConfig: AppConfig = {
   observeDurationSeconds: 120,
   observeIntervalSeconds: 1,
   seedClear: true,
+  notificationsEnabled: false,
+  notificationsDryRun: true,
 };
 
 test("does not write Firestore when API fetch fails", async () => {

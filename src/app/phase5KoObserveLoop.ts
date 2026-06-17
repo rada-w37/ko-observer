@@ -8,6 +8,17 @@ import {
 import {
   loadMonitorGuildTargetFromGuildShares,
 } from "../firestore/guildShareRepository.js";
+import {
+  createNotificationCoordinator,
+} from "../notifications/application/createNotificationCoordinator.js";
+import type {
+  NotificationCoordinator,
+} from "../notifications/application/notificationCoordinator.js";
+import {
+  createFallbackBaseName,
+  type NotificationBattleType,
+  type NotificationObservation,
+} from "../notifications/domain/notificationDomain.js";
 import { GvgRealtimeClient } from "../mentemori/realtimeClient.js";
 import {
   parseRealtimePayload,
@@ -38,6 +49,7 @@ type Phase5KoObserveLoopDependencies = {
   writeGuildKoTotals?: typeof writeGuildKoTotals;
   resolveBattleSubscriptionScope?: typeof resolveBattleSubscriptionScope;
   loadMonitorGuildTargetFromGuildShares?: typeof loadMonitorGuildTargetFromGuildShares;
+  createNotificationCoordinator?: typeof createNotificationCoordinator;
   now?: () => Date;
   sleep?: (milliseconds: number) => Promise<void>;
 };
@@ -46,6 +58,7 @@ const GUILD_TOTAL_UPDATE_INTERVAL_MILLISECONDS = 5000;
 const LOOP_SLEEP_MILLISECONDS = 250;
 const DEBUG_LOG_SAMPLE_LIMIT = 10;
 const DEBUG_HEX_DUMP_BYTES = 32;
+const NOTIFICATION_FLUSH_TIMEOUT_MILLISECONDS = 5000;
 
 export async function runPhase5KoObserveLoop(
   config: AppConfig,
@@ -62,6 +75,8 @@ export async function runPhase5KoObserveLoop(
     dependencies.resolveBattleSubscriptionScope ?? resolveBattleSubscriptionScope;
   const loadMonitorGuildTarget =
     dependencies.loadMonitorGuildTargetFromGuildShares ?? loadMonitorGuildTargetFromGuildShares;
+  const initializeNotificationCoordinator =
+    dependencies.createNotificationCoordinator ?? createNotificationCoordinator;
   const realtimeClient = (dependencies.createRealtimeClient ?? (() => new GvgRealtimeClient()))();
   const guildNames = new Map<string, string>();
   const castleStates = new Map<number, KoCastleState>();
@@ -116,6 +131,11 @@ export async function runPhase5KoObserveLoop(
 
   const resolveRealtimeGuildId = createRealtimeGuildIdResolver(subscriptionScope);
   seedParticipantGuildNames(subscriptionScope);
+  const notificationCoordinator = await initializeNotificationCoordinator({
+    firestore,
+    config,
+    guildId: subscriptionScope.guildId,
+  });
   const subscriptionPayload = createSubscriptionPayload(subscriptionScope);
   const initializeResult = await initializeRun(firestore, startedAt);
   logger.info(
@@ -191,6 +211,7 @@ export async function runPhase5KoObserveLoop(
     }
   } finally {
     realtimeClient.disconnect("duration reached");
+    await flushNotificationCoordinatorSafely(notificationCoordinator);
   }
 
   logSummary(subscriptionScope, counters, config.observeDurationSeconds);
@@ -247,6 +268,23 @@ export async function runPhase5KoObserveLoop(
       counters.unknownVictimKoAdds += Math.max(unknownVictimKoDelta, 0);
       logKoObserveDecision(message, previousState, result, ownerGuildId, attackerGuildId, unknownVictimKoDelta);
       castleStates.set(message.castleId, result.state);
+      const notificationBattleType = toNotificationBattleType(subscriptionScope.battleType);
+      if (subscriptionScope.guildId && notificationBattleType) {
+        observeNotificationSafely(notificationCoordinator, {
+          guildId: subscriptionScope.guildId,
+          battleType: notificationBattleType,
+          castleId: message.castleId,
+          baseName: createFallbackBaseName(message.castleId),
+          attackerGuildId,
+          attackerGuildName: getGuildName(message.attackerGuildId),
+          defenseCount: message.defensePartyCount,
+          attackCount: message.attackPartyCount,
+          observedAt: receivedAt,
+          worldId: subscriptionScope.worldId,
+          ...(subscriptionScope.blockId === null ? {} : { blockId: subscriptionScope.blockId }),
+          runId: config.runId,
+        });
+      }
 
       if (result.shouldPersistCastle) {
         await persistCastleKoDetail(firestore, createKoCastlePublicSnapshot(result.state));
@@ -384,6 +422,48 @@ export async function runPhase5KoObserveLoop(
         `shouldUpdateGuildTotals=${result.shouldUpdateGuildTotals} reason=${reason}`,
     );
   }
+}
+
+function observeNotificationSafely(
+  notificationCoordinator: NotificationCoordinator,
+  observation: NotificationObservation,
+): void {
+  try {
+    notificationCoordinator.observe(observation);
+  } catch (error) {
+    logger.warn(`notification observe failed in loop: ${formatErrorMessage(error)}`);
+  }
+}
+
+async function flushNotificationCoordinatorSafely(
+  notificationCoordinator: NotificationCoordinator,
+): Promise<void> {
+  try {
+    const result = await notificationCoordinator.flush({
+      timeoutMs: NOTIFICATION_FLUSH_TIMEOUT_MILLISECONDS,
+    });
+    if (hasNotificationFlushActivity(result)) {
+      logger.info(
+        `notification flush completed timedOut=${result.timedOut} pending=${result.pendingCount} ` +
+          `created=${result.createdCount} duplicate=${result.duplicateCount} dryRun=${result.dryRunCount} ` +
+          `skipped=${result.skippedCount} failed=${result.failedCount}`,
+      );
+    }
+  } catch (error) {
+    logger.warn(`notification flush failed in loop: ${formatErrorMessage(error)}`);
+  }
+}
+
+function hasNotificationFlushActivity(result: Awaited<ReturnType<NotificationCoordinator["flush"]>>): boolean {
+  return (
+    result.timedOut ||
+    result.pendingCount > 0 ||
+    result.createdCount > 0 ||
+    result.duplicateCount > 0 ||
+    result.dryRunCount > 0 ||
+    result.skippedCount > 0 ||
+    result.failedCount > 0
+  );
 }
 
 type ResolvedMonitorTarget =
@@ -552,6 +632,16 @@ function determineDecisionReason(
     return "before_battle_start";
   }
   return "not_persist_condition";
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown";
+}
+
+function toNotificationBattleType(
+  battleType: BattleSubscriptionScope["battleType"],
+): NotificationBattleType | null {
+  return battleType === "guildBattle" || battleType === "grandBattle" ? battleType : null;
 }
 
 function normalizeGuildId(guildId: string, worldId: string): string {

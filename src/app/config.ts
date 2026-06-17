@@ -10,6 +10,8 @@ export type AppConfig = {
   observeDurationSeconds: number;
   observeIntervalSeconds: number;
   seedClear: boolean;
+  notificationsEnabled: boolean;
+  notificationsDryRun: boolean;
 };
 
 export type KooMode =
@@ -53,6 +55,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     DEFAULT_OBSERVE_INTERVAL_SECONDS,
   );
   const seedClear = loadBooleanEnv(env.KOO_SEED_CLEAR, "KOO_SEED_CLEAR", true);
+  const notificationsEnabled = loadBooleanEnv(
+    env.KOO_NOTIFICATIONS_ENABLED,
+    "KOO_NOTIFICATIONS_ENABLED",
+    false,
+  );
+  const notificationsDryRun = loadBooleanEnv(
+    env.KOO_NOTIFICATIONS_DRY_RUN,
+    "KOO_NOTIFICATIONS_DRY_RUN",
+    true,
+  );
 
   if (observeDurationSeconds > MAX_OBSERVE_DURATION_SECONDS) {
     throw new Error(
@@ -76,6 +88,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     observeDurationSeconds,
     observeIntervalSeconds,
     seedClear,
+    notificationsEnabled,
+    notificationsDryRun,
   };
 }
 

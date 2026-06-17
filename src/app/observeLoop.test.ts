@@ -14,6 +14,8 @@ const baseConfig: AppConfig = {
   observeDurationSeconds: 3,
   observeIntervalSeconds: 1,
   seedClear: true,
+  notificationsEnabled: false,
+  notificationsDryRun: true,
 };
 
 test("runs multiple iterations until duration is exceeded", async () => {

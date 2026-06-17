@@ -60,6 +60,50 @@ test("loads phase5 KO observe loop config without manual world for production ta
   assert.equal(config.guildId, undefined);
 });
 
+test("loads notification flags with safe defaults", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase5-ko-observe-loop",
+  });
+
+  assert.equal(config.notificationsEnabled, false);
+  assert.equal(config.notificationsDryRun, true);
+});
+
+test("loads notification flags from env", () => {
+  const config = loadConfig({
+    ...baseEnv,
+    KOO_MODE: "phase5-ko-observe-loop",
+    KOO_NOTIFICATIONS_ENABLED: "true",
+    KOO_NOTIFICATIONS_DRY_RUN: "false",
+  });
+
+  assert.equal(config.notificationsEnabled, true);
+  assert.equal(config.notificationsDryRun, false);
+});
+
+test("rejects invalid notification flag values", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase5-ko-observe-loop",
+        KOO_NOTIFICATIONS_ENABLED: "yes",
+      }),
+    /KOO_NOTIFICATIONS_ENABLED must be true or false/,
+  );
+
+  assert.throws(
+    () =>
+      loadConfig({
+        ...baseEnv,
+        KOO_MODE: "phase5-ko-observe-loop",
+        KOO_NOTIFICATIONS_DRY_RUN: "no",
+      }),
+    /KOO_NOTIFICATIONS_DRY_RUN must be true or false/,
+  );
+});
+
 test("loads phase6 dummy seed config with clear default", () => {
   const config = loadConfig({
     ...baseEnv,

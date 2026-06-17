@@ -5,6 +5,12 @@ import type { GvgRealtimeClient } from "../mentemori/realtimeClient.js";
 import { runPhase5KoObserveLoop } from "./phase5KoObserveLoop.js";
 import type { AppConfig } from "./config.js";
 import { buildGvgStreamId } from "../mentemori/streamId.js";
+import type {
+  NotificationCoordinator,
+} from "../notifications/application/notificationCoordinator.js";
+import type {
+  NotificationObservation,
+} from "../notifications/domain/notificationDomain.js";
 
 test("initializes Grand Battle participant guildKoTotals with zero KO", async () => {
   const writtenTotals: Array<Map<string, GuildKoTotalWriteInput>> = [];
@@ -156,6 +162,140 @@ test("resolves monitor target from guildShares when manual world is not set", as
   });
 });
 
+test("keeps KO saves running when notification observe throws", async () => {
+  const writtenTotals: Array<Map<string, GuildKoTotalWriteInput>> = [];
+  const notificationCoordinator = createNotificationCoordinatorStub({
+    observe: () => {
+      throw new Error("notification failure");
+    },
+  });
+
+  await runPhase5KoObserveLoop(createConfig({ notificationsEnabled: true }), createFirestoreStub(), {
+    createRealtimeClient: () =>
+      createRealtimeClientStub([
+        createCastleStatusBytes({ guildId: 110796857, koCount: 0, defensePartyCount: 10 }),
+        createCastleStatusBytes({ guildId: 110796857, koCount: 7, defensePartyCount: 3 }),
+      ]),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "grandBattle",
+      subscriptionType: "grandBattle",
+      worldId: "1037",
+      guildId: "110796857037",
+      worldGroupId: 12,
+      classId: 3,
+      blockId: 2,
+      participantGuilds: [
+        { guildId: "110796857020", guildName: "Guild A" },
+        { guildId: "562434163034", guildName: "Guild B" },
+        { guildId: "576802057037", guildName: "Guild C" },
+        { guildId: "844121064012", guildName: "Guild D" },
+      ],
+    }),
+    createNotificationCoordinator: async () => notificationCoordinator,
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async (_firestore, guildKoTotals) => {
+      writtenTotals.push(new Map(guildKoTotals));
+    },
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  assert.equal(writtenTotals.length, 2);
+  assert.equal(writtenTotals[1]?.get("110796857020")?.totalVictimKoCount, 7);
+});
+
+test("flushes notifications in finally without blocking loop completion on failure", async () => {
+  let flushCalled = false;
+  const notificationCoordinator = createNotificationCoordinatorStub({
+    flush: async () => {
+      flushCalled = true;
+      throw new Error("flush failure");
+    },
+  });
+
+  await runPhase5KoObserveLoop(createConfig({ notificationsEnabled: true }), createFirestoreStub(), {
+    createRealtimeClient: () => createRealtimeClientStub(),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "guildBattle",
+      subscriptionType: "guildBattle",
+      worldId: "1001",
+      guildId: "111111111001",
+      worldGroupId: null,
+      classId: null,
+      blockId: null,
+    }),
+    createNotificationCoordinator: async () => notificationCoordinator,
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+  });
+
+  assert.equal(flushCalled, true);
+});
+
+test("passes read-only notification observation after castle state update", async () => {
+  const observations: NotificationObservation[] = [];
+
+  await runPhase5KoObserveLoop(createConfig({ notificationsEnabled: true }), createFirestoreStub(), {
+    createRealtimeClient: () =>
+      createRealtimeClientStub([
+        createCastleStatusBytes({
+          guildId: 111111111,
+          attackerGuildId: 222222222,
+          defensePartyCount: 3,
+          attackPartyCount: 5,
+          koCount: 0,
+        }),
+      ]),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "guildBattle",
+      subscriptionType: "guildBattle",
+      worldId: "1001",
+      guildId: "111111111001",
+      worldGroupId: null,
+      classId: null,
+      blockId: null,
+    }),
+    createNotificationCoordinator: async () =>
+      createNotificationCoordinatorStub({
+        observe: (observation) => {
+          observations.push(observation);
+        },
+      }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  assert.equal(observations.length, 1);
+  assert.deepEqual(observations[0], {
+    guildId: "111111111001",
+    battleType: "guildBattle",
+    castleId: 1,
+    baseName: "拠点1",
+    attackerGuildId: "222222222001",
+    attackerGuildName: null,
+    defenseCount: 3,
+    attackCount: 5,
+    observedAt: new Date("2026-06-11T12:00:02.000Z"),
+    worldId: "1001",
+    runId: "test",
+  });
+});
+
 test("stops when guildShares has no monitor target", async () => {
   let initialized = false;
 
@@ -224,6 +364,8 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     observeDurationSeconds: 1,
     observeIntervalSeconds: 1,
     seedClear: true,
+    notificationsEnabled: false,
+    notificationsDryRun: true,
     ...overrides,
   };
 }
@@ -266,6 +408,24 @@ function createRealtimeClientStub(payloads: number[][] = []): GvgRealtimeClient 
       listener?.({ type: "disconnected", reason });
     },
   } as unknown as GvgRealtimeClient;
+}
+
+function createNotificationCoordinatorStub(
+  overrides: Partial<NotificationCoordinator> = {},
+): NotificationCoordinator {
+  return {
+    observe: () => {},
+    flush: async () => ({
+      timedOut: false,
+      pendingCount: 0,
+      createdCount: 0,
+      duplicateCount: 0,
+      dryRunCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+    }),
+    ...overrides,
+  };
 }
 
 function createCastleStatusBytes(
