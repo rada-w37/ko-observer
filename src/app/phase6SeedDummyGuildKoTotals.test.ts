@@ -15,6 +15,8 @@ const baseConfig: AppConfig = {
   observeDurationSeconds: 120,
   observeIntervalSeconds: 1,
   seedClear: true,
+  notificationsEnabled: false,
+  notificationsDryRun: true,
 };
 
 test("seeds dummy guild KO totals from real localgvg guild ids", async () => {
