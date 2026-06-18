@@ -34,6 +34,8 @@ jobs:
         env:
           KOO_MODE: phase5-ko-observe-loop
           KOO_OBSERVE_DURATION_SECONDS: "3000"
+          KOO_NOTIFICATIONS_ENABLED: "true"
+          KOO_NOTIFICATIONS_DRY_RUN: "false"
           FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_CLIENT_EMAIL: ${{ secrets.FIREBASE_CLIENT_EMAIL }}
           FIREBASE_PRIVATE_KEY: ${{ secrets.FIREBASE_PRIVATE_KEY }}
