@@ -1,4 +1,5 @@
 import {
+  compareNotificationRulePriority,
   evaluateNotificationRule,
   type NotificationObservation,
   type NotificationRequest,
@@ -45,6 +46,12 @@ type NotificationCoordinatorOptions = {
   logger?: NotificationCoordinatorLogger;
 };
 
+type NotificationCandidate = {
+  rule: NotificationRule;
+  requestId: string;
+  request: NotificationRequest;
+};
+
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 
 export class AsyncNotificationCoordinator implements NotificationCoordinator {
@@ -65,34 +72,40 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
 
   observe(observation: NotificationObservation): void {
     try {
+      const candidates: NotificationCandidate[] = [];
       for (const rule of this.options.rules) {
         const result = evaluateNotificationRule(rule, observation);
         if (result.status !== "matched") {
           continue;
         }
 
-        if (this.seenRequestIds.has(result.requestId)) {
-          this.skippedCount += 1;
-          continue;
-        }
-        this.seenRequestIds.add(result.requestId);
-
-        if (this.options.dryRun) {
-          this.dryRunCount += 1;
-          this.logger.info(
-            `notification dry-run matched requestId=${result.requestId} ruleId=${result.request.ruleId}`,
-          );
-          continue;
-        }
-
-        if (this.pendingTasks.size >= this.maxQueueSize) {
-          this.skippedCount += 1;
-          this.logger.warn("notification queue limit reached; request skipped");
-          continue;
-        }
-
-        this.enqueueCreateRequest(result.requestId, result.request);
+        candidates.push({
+          rule,
+          requestId: result.requestId,
+          request: result.request,
+        });
       }
+
+      if (candidates.length === 0) {
+        return;
+      }
+
+      candidates.sort((firstCandidate, secondCandidate) =>
+        compareNotificationRulePriority(firstCandidate.rule, secondCandidate.rule),
+      );
+
+      if (this.options.dryRun) {
+        this.handleDryRunCandidates(candidates);
+        return;
+      }
+
+      if (this.pendingTasks.size >= this.maxQueueSize) {
+        this.skippedCount += 1;
+        this.logger.warn("notification queue limit reached; candidate requests skipped");
+        return;
+      }
+
+      this.enqueueCreateCandidates(candidates);
     } catch (error) {
       this.failedCount += 1;
       this.logger.warn(`notification observe failed: ${formatErrorMessage(error)}`);
@@ -121,29 +134,62 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
     return this.createFlushResult(false);
   }
 
-  private enqueueCreateRequest(requestId: string, request: NotificationRequest): void {
+  private handleDryRunCandidates(candidates: NotificationCandidate[]): void {
+    const candidate = this.findFirstUnseenCandidate(candidates);
+    if (!candidate) {
+      return;
+    }
+
+    this.seenRequestIds.add(candidate.requestId);
+    this.dryRunCount += 1;
+    this.logger.info(
+      `notification dry-run matched requestId=${candidate.requestId} ruleId=${candidate.request.ruleId}`,
+    );
+  }
+
+  private enqueueCreateCandidates(candidates: NotificationCandidate[]): void {
     let task: Promise<void>;
-    task = this.createRequestSafely(requestId, request).finally(() => {
+    task = this.createCandidateRequestSafely(candidates).finally(() => {
       this.pendingTasks.delete(task);
     });
     this.pendingTasks.add(task);
   }
 
-  private async createRequestSafely(
-    requestId: string,
-    request: NotificationRequest,
-  ): Promise<void> {
-    try {
-      const result = await this.options.createRequest(requestId, request);
-      if (result.status === "duplicate") {
-        this.duplicateCount += 1;
+  private async createCandidateRequestSafely(candidates: NotificationCandidate[]): Promise<void> {
+    for (const candidate of candidates) {
+      if (this.seenRequestIds.has(candidate.requestId)) {
+        this.skippedCount += 1;
+        continue;
+      }
+
+      this.seenRequestIds.add(candidate.requestId);
+      try {
+        const result = await this.options.createRequest(candidate.requestId, candidate.request);
+        if (result.status === "duplicate") {
+          this.duplicateCount += 1;
+          continue;
+        }
+        this.createdCount += 1;
+        return;
+      } catch (error) {
+        this.failedCount += 1;
+        this.logger.warn(`notification request create failed: ${formatErrorMessage(error)}`);
         return;
       }
-      this.createdCount += 1;
-    } catch (error) {
-      this.failedCount += 1;
-      this.logger.warn(`notification request create failed: ${formatErrorMessage(error)}`);
     }
+  }
+
+  private findFirstUnseenCandidate(
+    candidates: NotificationCandidate[],
+  ): NotificationCandidate | null {
+    for (const candidate of candidates) {
+      if (this.seenRequestIds.has(candidate.requestId)) {
+        this.skippedCount += 1;
+        continue;
+      }
+      return candidate;
+    }
+    return null;
   }
 
   private createFlushResult(timedOut: boolean): NotificationFlushResult {

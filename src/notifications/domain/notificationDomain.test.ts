@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  compareNotificationRulePriority,
   createFallbackBaseName,
   evaluateNotificationRule,
   parseStartTimeMinutes,
@@ -24,49 +25,143 @@ test("skips disabled and battle type mismatch rules", () => {
   );
 });
 
-test("compares start time by JST minutes", () => {
+test("compares schedule start and end time by JST minutes", () => {
   const rule = createRule({
-    conditions: {
+    schedule: {
       startTime: "20:55",
-      defenseCountMax: null,
-      attackCountMin: null,
+      endTime: "20:56",
     },
   });
 
   assert.deepEqual(
-    evaluateNotificationRule(rule, createObservation({ observedAt: new Date("2026-06-17T11:54:00.000Z") })),
+    evaluateNotificationRule(
+      rule,
+      createObservation({ observedAt: new Date("2026-06-17T11:54:00.000Z") }),
+    ),
     {
       status: "skipped",
       reason: "before_start_time",
     },
   );
   assert.equal(
-    evaluateNotificationRule(rule, createObservation({ observedAt: new Date("2026-06-17T11:55:00.000Z") })).status,
+    evaluateNotificationRule(
+      rule,
+      createObservation({ observedAt: new Date("2026-06-17T11:55:00.000Z") }),
+    ).status,
     "matched",
+  );
+  assert.equal(
+    evaluateNotificationRule(
+      rule,
+      createObservation({ observedAt: new Date("2026-06-17T11:56:00.000Z") }),
+    ).status,
+    "matched",
+  );
+  assert.deepEqual(
+    evaluateNotificationRule(
+      rule,
+      createObservation({ observedAt: new Date("2026-06-17T11:57:00.000Z") }),
+    ),
+    {
+      status: "skipped",
+      reason: "after_end_time",
+    },
   );
 });
 
-test("evaluates defense and attack count conditions", () => {
+test("evaluates detail condition root OR and groups", () => {
   const rule = createRule({
-    conditions: {
-      startTime: "20:50",
-      defenseCountMax: 3,
-      attackCountMin: 2,
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "attackCount",
+          operator: ">=",
+          value: 10,
+        },
+        {
+          type: "group",
+          operator: "AND",
+          children: [
+            {
+              type: "condition",
+              field: "defenseCount",
+              operator: "<=",
+              value: 3,
+            },
+            {
+              type: "condition",
+              field: "attackCount",
+              operator: ">=",
+              value: 2,
+            },
+          ],
+        },
+      ],
     },
   });
 
-  assert.deepEqual(evaluateNotificationRule(rule, createObservation({ defenseCount: 4 })), {
-    status: "skipped",
-    reason: "defense_count_not_matched",
-  });
   assert.deepEqual(evaluateNotificationRule(rule, createObservation({ attackCount: 1 })), {
     status: "skipped",
-    reason: "attack_count_not_matched",
+    reason: "detail_conditions_not_matched",
   });
   assert.equal(
     evaluateNotificationRule(rule, createObservation({ defenseCount: 3, attackCount: 2 })).status,
     "matched",
   );
+  assert.equal(
+    evaluateNotificationRule(rule, createObservation({ defenseCount: 99, attackCount: 10 })).status,
+    "matched",
+  );
+});
+
+test("filters target guild ids only for Guild Battle", () => {
+  const rule = createRule({
+    targetGuildIds: ["target-guild"],
+  });
+
+  assert.equal(
+    evaluateNotificationRule(
+      rule,
+      createObservation({ attackerGuildId: "target-guild" }),
+    ).status,
+    "matched",
+  );
+  assert.deepEqual(
+    evaluateNotificationRule(rule, createObservation({ attackerGuildId: "other-guild" })),
+    {
+      status: "skipped",
+      reason: "target_guild_not_matched",
+    },
+  );
+  assert.deepEqual(evaluateNotificationRule(rule, createObservation({ attackerGuildId: null })), {
+    status: "skipped",
+    reason: "target_guild_not_matched",
+  });
+  assert.equal(
+    evaluateNotificationRule(createRule({ targetGuildIds: [] }), createObservation()).status,
+    "matched",
+  );
+});
+
+test("uses observedAt for temporary suspension expiry", () => {
+  const future = createRule({
+    temporarySuspension: {
+      expiresAt: "2026-06-17T12:00:00.000Z",
+    },
+  });
+  const expired = createRule({
+    temporarySuspension: {
+      expiresAt: "2026-06-17T11:00:00.000Z",
+    },
+  });
+
+  assert.deepEqual(evaluateNotificationRule(future, createObservation()), {
+    status: "skipped",
+    reason: "temporary_suspended",
+  });
+  assert.equal(evaluateNotificationRule(expired, createObservation()).status, "matched");
 });
 
 test("renders templates and mention text", () => {
@@ -90,14 +185,10 @@ test("renders templates and mention text", () => {
   assert.equal(result.request.message.body, "2/5 20:55");
 });
 
-test("creates stable request id and attacker key fallbacks", () => {
+test("creates stable request id and duplicate key components", () => {
   const rule = createRule();
   const withId = evaluateNotificationRule(rule, createObservation());
   const withIdAgain = evaluateNotificationRule(rule, createObservation());
-  const withName = evaluateNotificationRule(
-    rule,
-    createObservation({ attackerGuildId: null, attackerGuildName: "Attacker A" }),
-  );
   const unknown = evaluateNotificationRule(
     rule,
     createObservation({ attackerGuildId: null, attackerGuildName: null }),
@@ -105,22 +196,34 @@ test("creates stable request id and attacker key fallbacks", () => {
 
   assert.equal(withId.status, "matched");
   assert.equal(withIdAgain.status, "matched");
-  assert.equal(withName.status, "matched");
   assert.equal(unknown.status, "matched");
-  if (
-    withId.status !== "matched" ||
-    withIdAgain.status !== "matched" ||
-    withName.status !== "matched" ||
-    unknown.status !== "matched"
-  ) {
+  if (withId.status !== "matched" || withIdAgain.status !== "matched" || unknown.status !== "matched") {
     return;
   }
 
   assert.equal(withId.requestId, withIdAgain.requestId);
-  assert.match(withId.request.duplicateKey, /:222222222001:/);
-  assert.match(withName.request.duplicateKey, /:Attacker A:/);
-  assert.match(unknown.request.duplicateKey, /:unknown:/);
+  assert.equal(
+    withId.request.duplicateKey,
+    "111111111001:guildBattle:1001:2026-06-17:rule-a:castle-1:222222222001",
+  );
+  assert.equal(
+    unknown.request.duplicateKey,
+    "111111111001:guildBattle:1001:2026-06-17:rule-a:castle-1:no-attacker",
+  );
   assert.equal(unknown.request.attackerGuildName, "不明");
+});
+
+test("sorts rule priority by later start, sortOrder, then id", () => {
+  const later = createRule({ id: "rule-b", schedule: { startTime: "21:10", endTime: null } });
+  const earlier = createRule({ id: "rule-a", schedule: { startTime: "21:00", endTime: null } });
+  const lowerSortOrder = createRule({ id: "rule-c", sortOrder: 1 });
+  const higherSortOrder = createRule({ id: "rule-d", sortOrder: 2 });
+  const lowerId = createRule({ id: "rule-e", sortOrder: 1 });
+  const higherId = createRule({ id: "rule-f", sortOrder: 1 });
+
+  assert.equal(compareNotificationRulePriority(later, earlier) < 0, true);
+  assert.equal(compareNotificationRulePriority(lowerSortOrder, higherSortOrder) < 0, true);
+  assert.equal(compareNotificationRulePriority(lowerId, higherId) < 0, true);
 });
 
 test("parses start time and creates fallback base name", () => {
@@ -134,13 +237,26 @@ test("parses start time and creates fallback base name", () => {
 function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule {
   return {
     id: "rule-a",
+    schemaVersion: 2,
     battleType: "guildBattle",
     name: "Rule A",
     enabled: true,
-    conditions: {
+    sortOrder: 1,
+    schedule: {
       startTime: "20:50",
-      defenseCountMax: null,
-      attackCountMin: null,
+      endTime: null,
+    },
+    targetGuildIds: [],
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "defenseCount",
+          operator: "<=",
+          value: 999,
+        },
+      ],
     },
     message: {
       usernameTemplate: "KOO",

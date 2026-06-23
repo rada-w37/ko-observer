@@ -37,7 +37,7 @@ test("observe enqueues request creation without awaiting it", async () => {
   assert.equal(flushed.createdCount, 1);
 });
 
-test("deduplicates matched requests with seenRequestIds", async () => {
+test("deduplicates matched requests with seenRequestIds before create", async () => {
   let createCount = 0;
   const coordinator = new AsyncNotificationCoordinator({
     rules: [createRule()],
@@ -57,14 +57,41 @@ test("deduplicates matched requests with seenRequestIds", async () => {
   assert.equal(flushed.skippedCount, 1);
 });
 
-test("dry-run evaluates but does not create requests", async () => {
+test("dry-run uses only first unseen candidate by priority", async () => {
   let createCount = 0;
+  const infos: string[] = [];
   const coordinator = new AsyncNotificationCoordinator({
-    rules: [createRule()],
+    rules: [
+      createRule({ id: "rule-a", schedule: { startTime: "20:50", endTime: null } }),
+      createRule({ id: "rule-b", schedule: { startTime: "21:00", endTime: null } }),
+    ],
     dryRun: true,
     createRequest: async () => {
       createCount += 1;
       return { status: "created" };
+    },
+    logger: createLogger([], infos),
+  });
+
+  coordinator.observe(createObservation({ observedAt: new Date("2026-06-17T12:05:00.000Z") }));
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createCount, 0);
+  assert.equal(flushed.dryRunCount, 1);
+  assert.equal(infos.some((message) => message.includes("ruleId=rule-b")), true);
+});
+
+test("falls back to next candidate only when Firestore reports duplicate", async () => {
+  const createdRuleIds: string[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({ id: "rule-a", sortOrder: 1 }),
+      createRule({ id: "rule-b", sortOrder: 2 }),
+    ],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRuleIds.push(request.ruleId);
+      return createdRuleIds.length === 1 ? { status: "duplicate" } : { status: "created" };
     },
     logger: createLogger(),
   });
@@ -72,16 +99,22 @@ test("dry-run evaluates but does not create requests", async () => {
   coordinator.observe(createObservation());
   const flushed = await coordinator.flush({ timeoutMs: 100 });
 
-  assert.equal(createCount, 0);
-  assert.equal(flushed.dryRunCount, 1);
+  assert.deepEqual(createdRuleIds, ["rule-a", "rule-b"]);
+  assert.equal(flushed.duplicateCount, 1);
+  assert.equal(flushed.createdCount, 1);
 });
 
-test("catches request creation failures inside queued task", async () => {
+test("does not fall back when Firestore create fails with non-duplicate error", async () => {
   const warnings: string[] = [];
+  const createdRuleIds: string[] = [];
   const coordinator = new AsyncNotificationCoordinator({
-    rules: [createRule()],
+    rules: [
+      createRule({ id: "rule-a", sortOrder: 1 }),
+      createRule({ id: "rule-b", sortOrder: 2 }),
+    ],
     dryRun: false,
-    createRequest: async () => {
+    createRequest: async (_requestId, request) => {
+      createdRuleIds.push(request.ruleId);
       throw new Error("firestore unavailable");
     },
     logger: createLogger(warnings),
@@ -91,6 +124,7 @@ test("catches request creation failures inside queued task", async () => {
   const flushed = await coordinator.flush({ timeoutMs: 100 });
   await sleep(0);
 
+  assert.deepEqual(createdRuleIds, ["rule-a"]);
   assert.equal(flushed.failedCount, 1);
   assert.equal(warnings.some((message) => message.includes("firestore unavailable")), true);
 });
@@ -99,7 +133,7 @@ test("skips enqueue when queue limit is reached", async () => {
   const deferred = createDeferred<void>();
   let createCount = 0;
   const coordinator = new AsyncNotificationCoordinator({
-    rules: [createRule(), createRule({ id: "rule-b" })],
+    rules: [createRule()],
     dryRun: false,
     maxQueueSize: 1,
     createRequest: async () => {
@@ -111,6 +145,7 @@ test("skips enqueue when queue limit is reached", async () => {
   });
 
   coordinator.observe(createObservation());
+  coordinator.observe(createObservation({ castleId: 2, baseName: "諡轤ｹ2" }));
   const timeoutResult = await coordinator.flush({ timeoutMs: 1 });
   assert.equal(timeoutResult.timedOut, true);
   assert.equal(createCount, 1);
@@ -138,30 +173,45 @@ test("noop coordinator is safe", async () => {
 function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule {
   return {
     id: "rule-a",
+    schemaVersion: 2,
     battleType: "guildBattle",
     name: "Rule A",
     enabled: true,
-    conditions: {
+    sortOrder: 1,
+    schedule: {
       startTime: "20:50",
-      defenseCountMax: null,
-      attackCountMin: null,
+      endTime: null,
+    },
+    targetGuildIds: [],
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "defenseCount",
+          operator: "<=",
+          value: 999,
+        },
+      ],
     },
     message: {
       usernameTemplate: "KOO",
       mention: { type: "none" },
-      titleTemplate: "{拠点名}",
-      bodyTemplate: "{防御数}",
+      titleTemplate: "{諡轤ｹ蜷閤",
+      bodyTemplate: "{髦ｲ蠕｡謨ｰ}",
     },
     ...overrides,
   };
 }
 
-function createObservation(): NotificationObservation {
+function createObservation(
+  overrides: Partial<NotificationObservation> = {},
+): NotificationObservation {
   return {
     guildId: "111111111001",
     battleType: "guildBattle",
     castleId: 1,
-    baseName: "拠点1",
+    baseName: "諡轤ｹ1",
     attackerGuildId: "222222222001",
     attackerGuildName: "Attacker A",
     defenseCount: 2,
@@ -169,6 +219,7 @@ function createObservation(): NotificationObservation {
     observedAt: new Date("2026-06-17T11:55:00.000Z"),
     worldId: "1001",
     runId: "run-a",
+    ...overrides,
   };
 }
 
@@ -186,12 +237,17 @@ function createDeferred<T>(): {
   };
 }
 
-function createLogger(warnings: string[] = []): {
-  info: () => void;
+function createLogger(
+  warnings: string[] = [],
+  infos: string[] = [],
+): {
+  info: (message: string) => void;
   warn: (message: string) => void;
 } {
   return {
-    info: () => {},
+    info: (message: string) => {
+      infos.push(message);
+    },
     warn: (message: string) => {
       warnings.push(message);
     },

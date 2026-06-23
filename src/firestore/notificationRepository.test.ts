@@ -7,33 +7,135 @@ import {
 } from "./notificationRepository.js";
 import type { NotificationRequest } from "../notifications/domain/notificationDomain.js";
 
-test("loads valid notification rules and skips invalid documents", async () => {
+test("loads Guild Battle v2 rules and classifies skipped documents", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "rule-a", createRuleData());
-  firestore.seedRule("guild-a", "rule-b", { ...createRuleData(), conditions: { startTime: "9:00" } });
+  firestore.seedRule("guild-a", "legacy-rule", { ...createRuleData(), schemaVersion: 1 });
+  firestore.seedRule("guild-a", "grand-rule", {
+    ...createRuleData(),
+    battleType: "grandBattle",
+  });
+  firestore.seedRule("guild-a", "invalid-rule", {
+    ...createRuleData(),
+    sortOrder: Number.NaN,
+  });
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
   assert.equal(result.rules.length, 1);
-  assert.equal(result.skippedInvalidCount, 1);
+  assert.equal(result.skippedUnsupportedVersionCount, 1);
+  assert.equal(result.skippedUnsupportedGrandBattleCount, 1);
+  assert.equal(result.skippedInvalidSchemaCount, 1);
   assert.deepEqual(result.rules[0], {
     id: "rule-a",
+    schemaVersion: 2,
     battleType: "guildBattle",
     name: "Rule A",
     enabled: true,
-    conditions: {
+    sortOrder: 3,
+    schedule: {
       startTime: "20:50",
-      defenseCountMax: 3,
-      attackCountMin: null,
+      endTime: null,
+    },
+    targetGuildIds: ["guild-b", "guild-c"],
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "defenseCount",
+          operator: "<=",
+          value: 3,
+        },
+      ],
     },
     message: {
       usernameTemplate: "KOO",
-      mention: { type: "here" },
-      titleTemplate: "{拠点名}",
-      bodyTemplate: "{防御数}",
+      mention: { type: "custom", customText: "<@123>" },
+      titleTemplate: "{諡轤ｹ蜷閤",
+      bodyTemplate: "{髦ｲ蠕｡謨ｰ}",
+    },
+    temporarySuspension: {
+      expiresAt: "2026-06-17T12:30:00.000Z",
     },
   });
   assert.equal(firestore.collectionIds.includes("notificationDestinations"), false);
+});
+
+test("uses document id as canonical and treats missing targetGuildIds as all targets", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "document-rule-id", {
+    ...createRuleData(),
+    id: "mismatched-data-id",
+    targetGuildIds: undefined,
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 1);
+  assert.equal(result.rules[0]?.id, "document-rule-id");
+  assert.deepEqual(result.rules[0]?.targetGuildIds, []);
+  assert.equal(result.skippedInvalidSchemaCount, 0);
+});
+
+test("skips invalid v2 schema fields", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "invalid-target", {
+    ...createRuleData(),
+    targetGuildIds: ["guild-b", " guild-b "],
+  });
+  firestore.seedRule("guild-a", "invalid-end-time", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "20:50",
+      endTime: "",
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-empty-root", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [],
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-nested-group", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "group",
+          operator: "AND",
+          children: [
+            {
+              type: "group",
+              operator: "OR",
+              children: [],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-condition", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "defensePartyCount",
+          operator: "<=",
+          value: 3,
+        },
+      ],
+    },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 0);
+  assert.equal(result.skippedInvalidSchemaCount, 5);
 });
 
 test("creates notification request with stable document id", async () => {
@@ -66,19 +168,35 @@ test("treats already existing notification request as duplicate", async () => {
 
 function createRuleData(): Record<string, unknown> {
   return {
+    schemaVersion: 2,
     battleType: "guildBattle",
     name: "Rule A",
     enabled: true,
-    conditions: {
+    sortOrder: 3,
+    schedule: {
       startTime: "20:50",
-      defenseCountMax: 3,
-      attackCountMin: null,
+      endTime: null,
+    },
+    targetGuildIds: [" guild-b ", "guild-c"],
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "condition",
+          field: "defenseCount",
+          operator: "<=",
+          value: 3,
+        },
+      ],
     },
     message: {
       usernameTemplate: "KOO",
-      mention: { type: "here" },
-      titleTemplate: "{拠点名}",
-      bodyTemplate: "{防御数}",
+      mention: { type: "custom", customText: "<@123>" },
+      titleTemplate: "{諡轤ｹ蜷閤",
+      bodyTemplate: "{髦ｲ蠕｡謨ｰ}",
+    },
+    temporarySuspension: {
+      expiresAt: "2026-06-17T12:30:00.000Z",
     },
   };
 }
@@ -91,7 +209,7 @@ function createRequest(): NotificationRequest {
     ruleName: "Rule A",
     duplicateKey: "duplicate-a",
     baseId: "castle-1",
-    baseName: "拠点1",
+    baseName: "諡轤ｹ1",
     attackerGuildId: "guild-b",
     attackerGuildName: "Guild B",
     defenseCount: 2,

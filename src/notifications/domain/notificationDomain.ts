@@ -12,21 +12,45 @@ export type NotificationMention =
       customText?: string;
     };
 
+export type NotificationDetailCondition = {
+  type: "condition";
+  field: "defenseCount" | "attackCount";
+  operator: "<=" | ">=";
+  value: number;
+};
+
+export type NotificationDetailConditionGroup = {
+  type: "group";
+  operator: "AND" | "OR";
+  children: NotificationDetailCondition[];
+};
+
+export type NotificationDetailConditionRoot = {
+  operator: "OR";
+  children: Array<NotificationDetailCondition | NotificationDetailConditionGroup>;
+};
+
 export type NotificationRule = {
   id: string;
+  schemaVersion: 2;
   battleType: NotificationBattleType;
   name: string;
   enabled: boolean;
-  conditions: {
+  sortOrder: number;
+  schedule: {
     startTime: string;
-    defenseCountMax: number | null;
-    attackCountMin: number | null;
+    endTime: string | null;
   };
+  targetGuildIds: string[];
+  detailConditions: NotificationDetailConditionRoot;
   message: {
     usernameTemplate: string;
     mention: NotificationMention;
     titleTemplate: string;
     bodyTemplate: string;
+  };
+  temporarySuspension?: {
+    expiresAt: string;
   };
 };
 
@@ -106,27 +130,36 @@ export function evaluateNotificationRule(
     return { status: "skipped", reason: "battle_type_mismatch" };
   }
 
-  const startTimeMinutes = parseStartTimeMinutes(rule.conditions.startTime);
+  if (isTemporarilySuspended(rule, observation)) {
+    return { status: "skipped", reason: "temporary_suspended" };
+  }
+
+  if (!isTargetGuildMatched(rule, observation)) {
+    return { status: "skipped", reason: "target_guild_not_matched" };
+  }
+
+  const startTimeMinutes = parseStartTimeMinutes(rule.schedule.startTime);
   if (startTimeMinutes === null) {
     return { status: "skipped", reason: "invalid_start_time" };
   }
 
-  if (getJstTimeMinutes(observation.observedAt) < startTimeMinutes) {
+  const endTimeMinutes =
+    rule.schedule.endTime === null ? null : parseStartTimeMinutes(rule.schedule.endTime);
+  if (rule.schedule.endTime !== null && endTimeMinutes === null) {
+    return { status: "skipped", reason: "invalid_end_time" };
+  }
+
+  const observedMinutes = getJstTimeMinutes(observation.observedAt);
+  if (observedMinutes < startTimeMinutes) {
     return { status: "skipped", reason: "before_start_time" };
   }
 
-  if (
-    rule.conditions.defenseCountMax !== null &&
-    observation.defenseCount > rule.conditions.defenseCountMax
-  ) {
-    return { status: "skipped", reason: "defense_count_not_matched" };
+  if (endTimeMinutes !== null && observedMinutes > endTimeMinutes) {
+    return { status: "skipped", reason: "after_end_time" };
   }
 
-  if (
-    rule.conditions.attackCountMin !== null &&
-    observation.attackCount < rule.conditions.attackCountMin
-  ) {
-    return { status: "skipped", reason: "attack_count_not_matched" };
+  if (!evaluateDetailConditionRoot(rule.detailConditions, observation)) {
+    return { status: "skipped", reason: "detail_conditions_not_matched" };
   }
 
   const request = createNotificationRequest(rule, observation);
@@ -152,7 +185,7 @@ export function createNotificationRequest(
     baseId,
     attackerKey: resolveAttackerKey(observation),
     battleDate,
-    startTime: rule.conditions.startTime,
+    worldId: observation.worldId,
   });
 
   return {
@@ -202,6 +235,21 @@ export function createFallbackBaseName(castleId: number): string {
   return `拠点${castleId}`;
 }
 
+export function compareNotificationRulePriority(
+  firstRule: NotificationRule,
+  secondRule: NotificationRule,
+): number {
+  const firstStartTime = parseStartTimeMinutes(firstRule.schedule.startTime) ?? -1;
+  const secondStartTime = parseStartTimeMinutes(secondRule.schedule.startTime) ?? -1;
+  if (firstStartTime !== secondStartTime) {
+    return secondStartTime - firstStartTime;
+  }
+  if (firstRule.sortOrder !== secondRule.sortOrder) {
+    return firstRule.sortOrder - secondRule.sortOrder;
+  }
+  return firstRule.id.localeCompare(secondRule.id);
+}
+
 export function parseStartTimeMinutes(startTime: string): number | null {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(startTime);
   if (!match) {
@@ -214,20 +262,20 @@ export function parseStartTimeMinutes(startTime: string): number | null {
 function createDuplicateKey(input: {
   guildId: string;
   battleType: NotificationBattleType;
+  worldId: string;
+  battleDate: string;
   ruleId: string;
   baseId: string;
   attackerKey: string;
-  battleDate: string;
-  startTime: string;
 }): string {
   return [
     input.guildId,
     input.battleType,
+    input.worldId,
+    input.battleDate,
     input.ruleId,
     input.baseId,
     input.attackerKey,
-    input.battleDate,
-    input.startTime,
   ].join(":");
 }
 
@@ -262,8 +310,70 @@ function renderTemplate(
     .replaceAll(TEMPLATE_VARIABLES.ruleName, rule.name);
 }
 
+function isTemporarilySuspended(
+  rule: NotificationRule,
+  observation: NotificationObservation,
+): boolean {
+  if (rule.temporarySuspension === undefined) {
+    return false;
+  }
+
+  const expiresAtMilliseconds = Date.parse(rule.temporarySuspension.expiresAt);
+  return (
+    Number.isFinite(expiresAtMilliseconds) &&
+    expiresAtMilliseconds > observation.observedAt.getTime()
+  );
+}
+
+function isTargetGuildMatched(
+  rule: NotificationRule,
+  observation: NotificationObservation,
+): boolean {
+  if (rule.battleType !== "guildBattle" || rule.targetGuildIds.length === 0) {
+    return true;
+  }
+
+  return (
+    observation.attackerGuildId !== null &&
+    rule.targetGuildIds.includes(observation.attackerGuildId)
+  );
+}
+
+function evaluateDetailConditionRoot(
+  root: NotificationDetailConditionRoot,
+  observation: NotificationObservation,
+): boolean {
+  return root.children.some((node) => evaluateDetailConditionNode(node, observation));
+}
+
+function evaluateDetailConditionNode(
+  node: NotificationDetailCondition | NotificationDetailConditionGroup,
+  observation: NotificationObservation,
+): boolean {
+  if (node.type === "condition") {
+    return evaluateDetailCondition(node, observation);
+  }
+
+  if (node.operator === "AND") {
+    return node.children.every((condition) => evaluateDetailCondition(condition, observation));
+  }
+
+  return node.children.some((condition) => evaluateDetailCondition(condition, observation));
+}
+
+function evaluateDetailCondition(
+  condition: NotificationDetailCondition,
+  observation: NotificationObservation,
+): boolean {
+  const observedValue =
+    condition.field === "defenseCount" ? observation.defenseCount : observation.attackCount;
+  return condition.operator === "<="
+    ? observedValue <= condition.value
+    : observedValue >= condition.value;
+}
+
 function resolveAttackerKey(observation: NotificationObservation): string {
-  return observation.attackerGuildId ?? observation.attackerGuildName ?? "unknown";
+  return observation.attackerGuildId ?? "no-attacker";
 }
 
 function resolveAttackerGuildName(observation: NotificationObservation): string {

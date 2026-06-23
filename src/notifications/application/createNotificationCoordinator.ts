@@ -32,7 +32,10 @@ export async function createNotificationCoordinator(input: {
   try {
     const result = await loadNotificationRules(input.firestore, input.guildId);
     logger.info(
-      `notification rules loaded count=${result.rules.length} skippedInvalid=${result.skippedInvalidCount}`,
+      `notification rules loaded count=${result.rules.length}` +
+        ` skippedUnsupportedVersion=${result.skippedUnsupportedVersionCount}` +
+        ` skippedUnsupportedGrandBattle=${result.skippedUnsupportedGrandBattleCount}` +
+        ` skippedInvalidSchema=${result.skippedInvalidSchemaCount}`,
     );
     return new AsyncNotificationCoordinator({
       rules: result.rules,
