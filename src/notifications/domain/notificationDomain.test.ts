@@ -297,6 +297,54 @@ test("derives battle side from owner and attacker guild in castle status", () =>
   );
 });
 
+test("matches Grand Battle rules and keeps battle type in request payload", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      battleType: "grandBattle",
+      targetGuildIds: ["unrelated-guild"],
+      detailConditions: {
+        operator: "OR",
+        children: [
+          {
+            type: "group",
+            operator: "AND",
+            children: [
+              {
+                type: "condition",
+                field: "defenseCount",
+                operator: "<=",
+                value: 30,
+              },
+              {
+                type: "condition",
+                field: "attackCount",
+                operator: ">=",
+                value: 1,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+    createObservation({
+      battleType: "grandBattle",
+      defenseCount: 30,
+      attackCount: 1,
+      worldId: "1037",
+      blockId: 2,
+    }),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.battleType, "grandBattle");
+  assert.equal(result.request.source.blockId, 2);
+  assert.equal(
+    result.request.duplicateKey,
+    "111111111001:grandBattle:1037:2026-06-17:rule-a:castle-1:222222222001",
+  );
+});
+
 test("sorts rule priority by later start, sortOrder, then id", () => {
   const later = createRule({ id: "rule-b", schedule: { startTime: "21:10", endTime: null } });
   const earlier = createRule({ id: "rule-a", schedule: { startTime: "21:00", endTime: null } });

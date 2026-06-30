@@ -104,6 +104,33 @@ test("falls back to next candidate only when Firestore reports duplicate", async
   assert.equal(flushed.createdCount, 1);
 });
 
+test("creates notification request from Grand Battle observation", async () => {
+  const createdRequests: NotificationRequest[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [createRule({ battleType: "grandBattle" })],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRequests.push(request);
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observe(
+    createObservation({ battleType: "grandBattle", worldId: "1037", blockId: 2 }),
+  );
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(flushed.createdCount, 1);
+  assert.equal(createdRequests.length, 1);
+  assert.equal(createdRequests[0]?.battleType, "grandBattle");
+  assert.equal(createdRequests[0]?.source.blockId, 2);
+  assert.equal(
+    createdRequests[0]?.duplicateKey,
+    "111111111001:grandBattle:1037:2026-06-17:rule-a:castle-1:222222222001",
+  );
+});
+
 test("does not fall back when Firestore create fails with non-duplicate error", async () => {
   const warnings: string[] = [];
   const createdRuleIds: string[] = [];

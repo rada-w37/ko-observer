@@ -50,7 +50,7 @@ type NormalizeNotificationRuleResult =
     }
   | {
       status: "skipped";
-      reason: "unsupportedVersion" | "unsupportedGrandBattle" | "invalidSchema";
+      reason: "unsupportedVersion" | "invalidSchema";
     };
 
 export async function loadNotificationRules(
@@ -72,8 +72,6 @@ export async function loadNotificationRules(
     if (result.status === "skipped") {
       if (result.reason === "unsupportedVersion") {
         skippedUnsupportedVersionCount += 1;
-      } else if (result.reason === "unsupportedGrandBattle") {
-        skippedUnsupportedGrandBattleCount += 1;
       } else {
         skippedInvalidSchemaCount += 1;
       }
@@ -121,10 +119,7 @@ function normalizeNotificationRule(
   if (data.schemaVersion !== 2) {
     return { status: "skipped", reason: "unsupportedVersion" };
   }
-  if (data.battleType === "grandBattle") {
-    return { status: "skipped", reason: "unsupportedGrandBattle" };
-  }
-  if (data.battleType !== "guildBattle") {
+  if (data.battleType !== "guildBattle" && data.battleType !== "grandBattle") {
     return skipInvalidSchema();
   }
   if (typeof data.name !== "string" || data.name.trim().length === 0) {

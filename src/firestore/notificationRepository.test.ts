@@ -7,13 +7,14 @@ import {
 } from "./notificationRepository.js";
 import type { NotificationRequest } from "../notifications/domain/notificationDomain.js";
 
-test("loads Guild Battle v2 rules and classifies skipped documents", async () => {
+test("loads Guild Battle and Grand Battle v2 rules and classifies skipped documents", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "rule-a", createRuleData());
   firestore.seedRule("guild-a", "legacy-rule", { ...createRuleData(), schemaVersion: 1 });
   firestore.seedRule("guild-a", "grand-rule", {
     ...createRuleData(),
     battleType: "grandBattle",
+    targetGuildIds: [],
   });
   firestore.seedRule("guild-a", "invalid-rule", {
     ...createRuleData(),
@@ -22,9 +23,9 @@ test("loads Guild Battle v2 rules and classifies skipped documents", async () =>
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
-  assert.equal(result.rules.length, 1);
+  assert.equal(result.rules.length, 2);
   assert.equal(result.skippedUnsupportedVersionCount, 1);
-  assert.equal(result.skippedUnsupportedGrandBattleCount, 1);
+  assert.equal(result.skippedUnsupportedGrandBattleCount, 0);
   assert.equal(result.skippedInvalidSchemaCount, 1);
   assert.deepEqual(result.rules[0], {
     id: "rule-a",
@@ -60,6 +61,10 @@ test("loads Guild Battle v2 rules and classifies skipped documents", async () =>
       expiresAt: "2026-06-17T12:30:00.000Z",
     },
   });
+  assert.equal(result.rules[1]?.id, "grand-rule");
+  assert.equal(result.rules[1]?.battleType, "grandBattle");
+  assert.equal(result.rules[1]?.battleSide, "defense");
+  assert.deepEqual(result.rules[1]?.targetGuildIds, []);
   assert.equal(firestore.collectionIds.includes("notificationDestinations"), false);
 });
 
