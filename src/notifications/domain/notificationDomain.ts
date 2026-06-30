@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { UNKNOWN_CASTLE_NAME } from "./castleName.js";
 
 export type NotificationBattleType = "guildBattle" | "grandBattle";
+export type NotificationBattleSide = "defense" | "attack";
+export type DerivedBattleSide = NotificationBattleSide | "unrelated";
 
 export type NotificationMention =
   | {
@@ -34,6 +37,7 @@ export type NotificationRule = {
   id: string;
   schemaVersion: 2;
   battleType: NotificationBattleType;
+  battleSide: NotificationBattleSide;
   name: string;
   enabled: boolean;
   sortOrder: number;
@@ -58,7 +62,8 @@ export type NotificationObservation = {
   guildId: string;
   battleType: NotificationBattleType;
   castleId: number;
-  baseName: string;
+  castleName: string;
+  ownerGuildId: string | null;
   attackerGuildId: string | null;
   attackerGuildName: string | null;
   defenseCount: number;
@@ -77,6 +82,7 @@ export type NotificationRequest = {
   duplicateKey: string;
   baseId: string;
   baseName: string;
+  castleName: string;
   attackerGuildId?: string;
   attackerGuildName: string;
   defenseCount: number;
@@ -128,6 +134,16 @@ export function evaluateNotificationRule(
 
   if (rule.battleType !== observation.battleType) {
     return { status: "skipped", reason: "battle_type_mismatch" };
+  }
+
+  const derivedBattleSide = deriveBattleSideFromCastleStatus({
+    ownGuildId: observation.guildId,
+    ownerGuildId: observation.ownerGuildId,
+    attackerGuildId: observation.attackerGuildId,
+    attackCount: observation.attackCount,
+  });
+  if (derivedBattleSide !== rule.battleSide) {
+    return { status: "skipped", reason: `battle_side_${derivedBattleSide}` };
   }
 
   if (isTemporarilySuspended(rule, observation)) {
@@ -195,7 +211,8 @@ export function createNotificationRequest(
     ruleName: rule.name,
     duplicateKey,
     baseId,
-    baseName: observation.baseName,
+    baseName: observation.castleName,
+    castleName: observation.castleName,
     ...(observation.attackerGuildId ? { attackerGuildId: observation.attackerGuildId } : {}),
     attackerGuildName,
     defenseCount: observation.defenseCount,
@@ -231,8 +248,29 @@ export function createNotificationRequestId(duplicateKey: string): string {
   return createHash("sha256").update(duplicateKey).digest("hex");
 }
 
-export function createFallbackBaseName(castleId: number): string {
-  return `拠点${castleId}`;
+export function createFallbackBaseName(_castleId: number): string {
+  return UNKNOWN_CASTLE_NAME;
+}
+
+export function deriveBattleSideFromCastleStatus(input: {
+  ownGuildId: string;
+  ownerGuildId: string | null;
+  attackerGuildId: string | null;
+  attackCount: number;
+}): DerivedBattleSide {
+  if (input.ownerGuildId === input.ownGuildId && input.attackCount > 0) {
+    return "defense";
+  }
+
+  if (
+    input.attackerGuildId === input.ownGuildId &&
+    input.ownerGuildId !== input.ownGuildId &&
+    input.attackCount > 0
+  ) {
+    return "attack";
+  }
+
+  return "unrelated";
 }
 
 export function compareNotificationRulePriority(
@@ -302,7 +340,7 @@ function renderTemplate(
   },
 ): string {
   return template
-    .replaceAll(TEMPLATE_VARIABLES.baseName, observation.baseName)
+    .replaceAll(TEMPLATE_VARIABLES.baseName, observation.castleName)
     .replaceAll(TEMPLATE_VARIABLES.attackerGuild, values.attackerGuildName)
     .replaceAll(TEMPLATE_VARIABLES.defenseCount, observation.defenseCount.toString())
     .replaceAll(TEMPLATE_VARIABLES.attackCount, observation.attackCount.toString())

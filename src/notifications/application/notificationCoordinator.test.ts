@@ -145,7 +145,7 @@ test("skips enqueue when queue limit is reached", async () => {
   });
 
   coordinator.observe(createObservation());
-  coordinator.observe(createObservation({ castleId: 2, baseName: "諡轤ｹ2" }));
+  coordinator.observe(createObservation({ castleId: 2, castleName: "モダーヴ" }));
   const timeoutResult = await coordinator.flush({ timeoutMs: 1 });
   assert.equal(timeoutResult.timedOut, true);
   assert.equal(createCount, 1);
@@ -175,6 +175,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    battleSide: "defense",
     name: "Rule A",
     enabled: true,
     sortOrder: 1,
@@ -211,7 +212,8 @@ function createObservation(
     guildId: "111111111001",
     battleType: "guildBattle",
     castleId: 1,
-    baseName: "諡轤ｹ1",
+    castleName: "ブラッセル",
+    ownerGuildId: "111111111001",
     attackerGuildId: "222222222001",
     attackerGuildName: "Attacker A",
     defenseCount: 2,

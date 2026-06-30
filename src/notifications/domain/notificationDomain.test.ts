@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compareNotificationRulePriority,
   createFallbackBaseName,
+  deriveBattleSideFromCastleStatus,
   evaluateNotificationRule,
   parseStartTimeMinutes,
   type NotificationObservation,
@@ -181,7 +182,7 @@ test("renders templates and mention text", () => {
   if (result.status !== "matched") return;
   assert.equal(result.request.message.username, "Rule A");
   assert.equal(result.request.message.mentionText, "<@123>");
-  assert.equal(result.request.message.title, "拠点1 Attacker A");
+  assert.equal(result.request.message.title, "ブラッセル Attacker A");
   assert.equal(result.request.message.body, "2/5 20:55");
 });
 
@@ -213,6 +214,89 @@ test("creates stable request id and duplicate key components", () => {
   assert.equal(unknown.request.attackerGuildName, "不明");
 });
 
+test("filters rules by battleSide derived from castle status", () => {
+  assert.equal(
+    evaluateNotificationRule(createRule({ battleSide: "defense" }), createObservation()).status,
+    "matched",
+  );
+  assert.deepEqual(
+    evaluateNotificationRule(
+      createRule({ battleSide: "attack" }),
+      createObservation({
+        ownerGuildId: "111111111001",
+        attackerGuildId: "111111111001",
+      }),
+    ),
+    {
+      status: "skipped",
+      reason: "battle_side_defense",
+    },
+  );
+  assert.equal(
+    evaluateNotificationRule(
+      createRule({ battleSide: "attack", targetGuildIds: ["111111111001"] }),
+      createObservation({
+        ownerGuildId: "222222222001",
+        attackerGuildId: "111111111001",
+        attackerGuildName: "Own Guild",
+      }),
+    ).status,
+    "matched",
+  );
+  assert.deepEqual(
+    evaluateNotificationRule(
+      createRule({ battleSide: "defense" }),
+      createObservation({
+        ownerGuildId: "333333333001",
+        attackerGuildId: "222222222001",
+      }),
+    ),
+    {
+      status: "skipped",
+      reason: "battle_side_unrelated",
+    },
+  );
+});
+
+test("derives battle side from owner and attacker guild in castle status", () => {
+  assert.equal(
+    deriveBattleSideFromCastleStatus({
+      ownGuildId: "guild-a",
+      ownerGuildId: "guild-a",
+      attackerGuildId: "guild-a",
+      attackCount: 2,
+    }),
+    "defense",
+  );
+  assert.equal(
+    deriveBattleSideFromCastleStatus({
+      ownGuildId: "guild-a",
+      ownerGuildId: "guild-b",
+      attackerGuildId: "guild-a",
+      attackCount: 2,
+    }),
+    "attack",
+  );
+  assert.equal(
+    deriveBattleSideFromCastleStatus({
+      ownGuildId: "guild-a",
+      ownerGuildId: "guild-b",
+      attackerGuildId: "guild-c",
+      attackCount: 2,
+    }),
+    "unrelated",
+  );
+  assert.equal(
+    deriveBattleSideFromCastleStatus({
+      ownGuildId: "guild-a",
+      ownerGuildId: "guild-a",
+      attackerGuildId: "guild-b",
+      attackCount: 0,
+    }),
+    "unrelated",
+  );
+});
+
 test("sorts rule priority by later start, sortOrder, then id", () => {
   const later = createRule({ id: "rule-b", schedule: { startTime: "21:10", endTime: null } });
   const earlier = createRule({ id: "rule-a", schedule: { startTime: "21:00", endTime: null } });
@@ -231,7 +315,7 @@ test("parses start time and creates fallback base name", () => {
   assert.equal(parseStartTimeMinutes("23:59"), 1439);
   assert.equal(parseStartTimeMinutes("24:00"), null);
   assert.equal(parseStartTimeMinutes("9:00"), null);
-  assert.equal(createFallbackBaseName(12), "拠点12");
+  assert.equal(createFallbackBaseName(12), "名称不明の拠点");
 });
 
 function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule {
@@ -239,6 +323,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    battleSide: "defense",
     name: "Rule A",
     enabled: true,
     sortOrder: 1,
@@ -275,7 +360,8 @@ function createObservation(
     guildId: "111111111001",
     battleType: "guildBattle",
     castleId: 1,
-    baseName: "拠点1",
+    castleName: "ブラッセル",
+    ownerGuildId: "111111111001",
     attackerGuildId: "222222222001",
     attackerGuildName: "Attacker A",
     defenseCount: 2,

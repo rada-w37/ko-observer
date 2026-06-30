@@ -30,6 +30,7 @@ test("loads Guild Battle v2 rules and classifies skipped documents", async () =>
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    battleSide: "defense",
     name: "Rule A",
     enabled: true,
     sortOrder: 3,
@@ -62,11 +63,12 @@ test("loads Guild Battle v2 rules and classifies skipped documents", async () =>
   assert.equal(firestore.collectionIds.includes("notificationDestinations"), false);
 });
 
-test("uses document id as canonical and treats missing targetGuildIds as all targets", async () => {
+test("uses document id as canonical and defaults missing optional v2 fields", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "document-rule-id", {
     ...createRuleData(),
     id: "mismatched-data-id",
+    battleSide: undefined,
     targetGuildIds: undefined,
   });
 
@@ -74,6 +76,7 @@ test("uses document id as canonical and treats missing targetGuildIds as all tar
 
   assert.equal(result.rules.length, 1);
   assert.equal(result.rules[0]?.id, "document-rule-id");
+  assert.equal(result.rules[0]?.battleSide, "defense");
   assert.deepEqual(result.rules[0]?.targetGuildIds, []);
   assert.equal(result.skippedInvalidSchemaCount, 0);
 });
@@ -131,11 +134,15 @@ test("skips invalid v2 schema fields", async () => {
       ],
     },
   });
+  firestore.seedRule("guild-a", "invalid-battle-side", {
+    ...createRuleData(),
+    battleSide: "both",
+  });
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
   assert.equal(result.rules.length, 0);
-  assert.equal(result.skippedInvalidSchemaCount, 5);
+  assert.equal(result.skippedInvalidSchemaCount, 6);
 });
 
 test("creates notification request with stable document id", async () => {
@@ -170,6 +177,7 @@ function createRuleData(): Record<string, unknown> {
   return {
     schemaVersion: 2,
     battleType: "guildBattle",
+    battleSide: "defense",
     name: "Rule A",
     enabled: true,
     sortOrder: 3,
@@ -209,7 +217,8 @@ function createRequest(): NotificationRequest {
     ruleName: "Rule A",
     duplicateKey: "duplicate-a",
     baseId: "castle-1",
-    baseName: "諡轤ｹ1",
+    baseName: "ブラッセル",
+    castleName: "ブラッセル",
     attackerGuildId: "guild-b",
     attackerGuildName: "Guild B",
     defenseCount: 2,

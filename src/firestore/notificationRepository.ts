@@ -6,6 +6,7 @@ import {
   type NotificationDetailConditionRoot,
   type NotificationMention,
   type NotificationRequest,
+  type NotificationBattleSide,
   type NotificationRule,
 } from "../notifications/domain/notificationDomain.js";
 
@@ -31,6 +32,7 @@ export type CreateNotificationRequestResult =
 type NotificationRuleData = {
   schemaVersion?: unknown;
   battleType?: unknown;
+  battleSide?: unknown;
   name?: unknown;
   enabled?: unknown;
   sortOrder?: unknown;
@@ -136,6 +138,7 @@ function normalizeNotificationRule(
   }
 
   const schedule = normalizeSchedule(data.schedule);
+  const battleSide = normalizeBattleSide(data.battleSide);
   const targetGuildIds = normalizeTargetGuildIds(data.targetGuildIds);
   const detailConditions = normalizeDetailConditions(data.detailConditions);
   const message = normalizeMessage(data.message);
@@ -143,6 +146,7 @@ function normalizeNotificationRule(
 
   if (
     schedule === null ||
+    battleSide === null ||
     targetGuildIds === null ||
     detailConditions === null ||
     message === null ||
@@ -157,6 +161,7 @@ function normalizeNotificationRule(
       id: ruleId,
       schemaVersion: 2,
       battleType: data.battleType,
+      battleSide,
       name: data.name.trim(),
       enabled: data.enabled,
       sortOrder: data.sortOrder,
@@ -167,6 +172,16 @@ function normalizeNotificationRule(
       ...(temporarySuspension === undefined ? {} : { temporarySuspension }),
     },
   };
+}
+
+function normalizeBattleSide(value: unknown): NotificationBattleSide | null {
+  if (value === undefined) {
+    return "defense";
+  }
+  if (value === "defense" || value === "attack") {
+    return value;
+  }
+  return null;
 }
 
 function normalizeSchedule(value: unknown): NotificationRule["schedule"] | null {
@@ -406,6 +421,7 @@ function toFirestoreNotificationRequest(request: NotificationRequest): Record<st
     duplicateKey: request.duplicateKey,
     baseId: request.baseId,
     baseName: request.baseName,
+    castleName: request.castleName,
     ...(request.attackerGuildId ? { attackerGuildId: request.attackerGuildId } : {}),
     attackerGuildName: request.attackerGuildName,
     defenseCount: request.defenseCount,

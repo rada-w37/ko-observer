@@ -19,6 +19,7 @@ import {
   type NotificationBattleType,
   type NotificationObservation,
 } from "../notifications/domain/notificationDomain.js";
+import { resolveCastleName } from "../notifications/domain/castleName.js";
 import { GvgRealtimeClient } from "../mentemori/realtimeClient.js";
 import {
   parseRealtimePayload,
@@ -270,11 +271,18 @@ export async function runPhase5KoObserveLoop(
       castleStates.set(message.castleId, result.state);
       const notificationBattleType = toNotificationBattleType(subscriptionScope.battleType);
       if (subscriptionScope.guildId && notificationBattleType) {
+        const resolvedCastleName = resolveCastleName(notificationBattleType, message.castleId);
+        if (resolvedCastleName === null) {
+          logger.warn(
+            `notification castle name unresolved battleType=${notificationBattleType} castleId=${message.castleId}`,
+          );
+        }
         observeNotificationSafely(notificationCoordinator, {
           guildId: subscriptionScope.guildId,
           battleType: notificationBattleType,
           castleId: message.castleId,
-          baseName: createFallbackBaseName(message.castleId),
+          castleName: resolvedCastleName ?? createFallbackBaseName(message.castleId),
+          ownerGuildId,
           attackerGuildId,
           attackerGuildName: getGuildName(message.attackerGuildId),
           defenseCount: message.defensePartyCount,
