@@ -2,3 +2,4 @@ node_modules/
 dist/
 .env
 guild-battle-monitor-firebase-adminsdk-fbsvc-47f758c3f3.json
+.codegraph/
