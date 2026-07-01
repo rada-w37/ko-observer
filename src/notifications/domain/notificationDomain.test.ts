@@ -117,6 +117,58 @@ test("evaluates detail condition root OR and groups", () => {
   );
 });
 
+test("matches time-only rules when detail conditions are empty", () => {
+  assert.equal(
+    evaluateNotificationRule(
+      createRule({
+        detailConditions: {
+          operator: "OR",
+          children: [],
+        },
+      }),
+      createObservation(),
+    ).status,
+    "matched",
+  );
+  assert.equal(
+    evaluateNotificationRule(
+      createRule({
+        detailConditions: {
+          operator: "OR",
+          children: [
+            {
+              type: "group",
+              operator: "AND",
+              children: [],
+            },
+          ],
+        },
+      }),
+      createObservation(),
+    ).status,
+    "matched",
+  );
+  assert.deepEqual(
+    evaluateNotificationRule(
+      createRule({
+        detailConditions: {
+          operator: "OR",
+          children: [],
+        },
+        schedule: {
+          startTime: "20:56",
+          endTime: null,
+        },
+      }),
+      createObservation(),
+    ),
+    {
+      status: "skipped",
+      reason: "before_start_time",
+    },
+  );
+});
+
 test("filters target guild ids only for Guild Battle", () => {
   const rule = createRule({
     targetGuildIds: ["target-guild"],

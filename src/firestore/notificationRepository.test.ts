@@ -99,13 +99,6 @@ test("skips invalid v2 schema fields", async () => {
       endTime: "",
     },
   });
-  firestore.seedRule("guild-a", "invalid-empty-root", {
-    ...createRuleData(),
-    detailConditions: {
-      operator: "OR",
-      children: [],
-    },
-  });
   firestore.seedRule("guild-a", "invalid-nested-group", {
     ...createRuleData(),
     detailConditions: {
@@ -147,7 +140,50 @@ test("skips invalid v2 schema fields", async () => {
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
   assert.equal(result.rules.length, 0);
-  assert.equal(result.skippedInvalidSchemaCount, 6);
+  assert.equal(result.skippedInvalidSchemaCount, 5);
+});
+
+test("loads rules without detail condition children", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "empty-root", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [],
+    },
+  });
+  firestore.seedRule("guild-a", "empty-group", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "group",
+          operator: "AND",
+          children: [],
+        },
+      ],
+    },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 2);
+  assert.deepEqual(result.rules[0]?.detailConditions, {
+    operator: "OR",
+    children: [],
+  });
+  assert.deepEqual(result.rules[1]?.detailConditions, {
+    operator: "OR",
+    children: [
+      {
+        type: "group",
+        operator: "AND",
+        children: [],
+      },
+    ],
+  });
+  assert.equal(result.skippedInvalidSchemaCount, 0);
 });
 
 test("creates notification request with stable document id", async () => {

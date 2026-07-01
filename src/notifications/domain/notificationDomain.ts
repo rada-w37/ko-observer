@@ -381,6 +381,10 @@ function evaluateDetailConditionRoot(
   root: NotificationDetailConditionRoot,
   observation: NotificationObservation,
 ): boolean {
+  if (!hasDetailCondition(root)) {
+    return true;
+  }
+
   return root.children.some((node) => evaluateDetailConditionNode(node, observation));
 }
 
@@ -390,6 +394,10 @@ function evaluateDetailConditionNode(
 ): boolean {
   if (node.type === "condition") {
     return evaluateDetailCondition(node, observation);
+  }
+
+  if (node.children.length === 0) {
+    return false;
   }
 
   if (node.operator === "AND") {
@@ -408,6 +416,15 @@ function evaluateDetailCondition(
   return condition.operator === "<="
     ? observedValue <= condition.value
     : observedValue >= condition.value;
+}
+
+function hasDetailCondition(root: NotificationDetailConditionRoot): boolean {
+  return root.children.some((node) => {
+    if (node.type === "condition") {
+      return true;
+    }
+    return node.children.length > 0;
+  });
 }
 
 function resolveAttackerKey(observation: NotificationObservation): string {

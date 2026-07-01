@@ -239,9 +239,6 @@ function normalizeDetailConditions(value: unknown): NotificationDetailConditionR
   if (!isRecord(value) || value.operator !== "OR" || !Array.isArray(value.children)) {
     return null;
   }
-  if (value.children.length === 0) {
-    return null;
-  }
 
   const children: Array<NotificationDetailCondition | NotificationDetailConditionGroup> = [];
   for (const child of value.children) {
@@ -274,7 +271,7 @@ function normalizeDetailConditionChild(
   if (value.operator !== "AND" && value.operator !== "OR") {
     return null;
   }
-  if (!Array.isArray(value.children) || value.children.length === 0) {
+  if (!Array.isArray(value.children)) {
     return null;
   }
 
