@@ -276,6 +276,45 @@ test("allows username templates that become blank after trimming", () => {
   assert.equal(result.request.message.username.trim(), "");
 });
 
+test("normalizes rendered title to 120 chars when template expansion is longer", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      name: "R".repeat(10),
+      message: {
+        usernameTemplate: "KOO",
+        mention: { type: "none" },
+        titleTemplate: `${"x".repeat(119)}{通知ルール名}`,
+        bodyTemplate: "body",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.message.title.length, 120);
+  assert.equal(result.request.message.title, `${"x".repeat(119)}…`);
+});
+
+test("keeps rendered title unchanged when it is within 120 chars", () => {
+  const title = "x".repeat(120);
+  const result = evaluateNotificationRule(
+    createRule({
+      message: {
+        usernameTemplate: "KOO",
+        mention: { type: "none" },
+        titleTemplate: title,
+        bodyTemplate: "body",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.message.title, title);
+});
+
 test("creates stable request id and duplicate key components", () => {
   const rule = createRule();
   const withId = evaluateNotificationRule(rule, createObservation());
@@ -452,6 +491,8 @@ test("parses start time and creates fallback base name", () => {
   assert.equal(parseStartTimeMinutes("00:00"), 0);
   assert.equal(parseStartTimeMinutes("23:59"), 1439);
   assert.equal(parseStartTimeMinutes("24:00"), null);
+  assert.equal(parseStartTimeMinutes("99:99"), null);
+  assert.equal(parseStartTimeMinutes("12:99"), null);
   assert.equal(parseStartTimeMinutes("9:00"), null);
   assert.equal(createFallbackBaseName(12), "名称不明の拠点");
 });

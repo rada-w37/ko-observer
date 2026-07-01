@@ -123,6 +123,8 @@ const TEMPLATE_VARIABLES = {
   notificationTime: "{通知時刻}",
   ruleName: "{通知ルール名}",
 } as const;
+const MESSAGE_TITLE_MAX_LENGTH = 120;
+const TRUNCATED_TITLE_SUFFIX = "…";
 
 export function evaluateNotificationRule(
   rule: NotificationRule,
@@ -223,10 +225,12 @@ export function createNotificationRequest(
         notificationTime,
       }),
       mentionText: renderMention(rule.message.mention),
-      title: renderTemplate(rule.message.titleTemplate, rule, observation, {
-        attackerGuildName,
-        notificationTime,
-      }),
+      title: normalizeMessageTitle(
+        renderTemplate(rule.message.titleTemplate, rule, observation, {
+          attackerGuildName,
+          notificationTime,
+        }),
+      ),
       body: renderTemplate(rule.message.bodyTemplate, rule, observation, {
         attackerGuildName,
         notificationTime,
@@ -346,6 +350,14 @@ function renderTemplate(
     .replaceAll(TEMPLATE_VARIABLES.attackCount, observation.attackCount.toString())
     .replaceAll(TEMPLATE_VARIABLES.notificationTime, values.notificationTime)
     .replaceAll(TEMPLATE_VARIABLES.ruleName, rule.name);
+}
+
+function normalizeMessageTitle(title: string): string {
+  if (title.length <= MESSAGE_TITLE_MAX_LENGTH) {
+    return title;
+  }
+
+  return `${title.slice(0, MESSAGE_TITLE_MAX_LENGTH - TRUNCATED_TITLE_SUFFIX.length)}${TRUNCATED_TITLE_SUFFIX}`;
 }
 
 function isTemporarilySuspended(

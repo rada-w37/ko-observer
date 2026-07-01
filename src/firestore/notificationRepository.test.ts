@@ -175,15 +175,95 @@ test("loads rules without detail condition children", async () => {
   });
   assert.deepEqual(result.rules[1]?.detailConditions, {
     operator: "OR",
+    children: [],
+  });
+  assert.equal(result.skippedInvalidSchemaCount, 0);
+});
+
+test("removes empty groups while keeping non-empty detail conditions", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "mixed-groups", {
+    ...createRuleData(),
+    detailConditions: {
+      operator: "OR",
+      children: [
+        {
+          type: "group",
+          operator: "AND",
+          children: [],
+        },
+        {
+          type: "condition",
+          field: "defenseCount",
+          operator: "<=",
+          value: 3,
+        },
+      ],
+    },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 1);
+  assert.deepEqual(result.rules[0]?.detailConditions, {
+    operator: "OR",
     children: [
       {
-        type: "group",
-        operator: "AND",
-        children: [],
+        type: "condition",
+        field: "defenseCount",
+        operator: "<=",
+        value: 3,
       },
     ],
   });
-  assert.equal(result.skippedInvalidSchemaCount, 0);
+});
+
+test("validates schedule time bounds", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "valid-min", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "00:00",
+      endTime: null,
+    },
+  });
+  firestore.seedRule("guild-a", "valid-max", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "23:59",
+      endTime: "23:59",
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-hour", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "24:00",
+      endTime: null,
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-minute", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "12:99",
+      endTime: null,
+    },
+  });
+  firestore.seedRule("guild-a", "invalid-both", {
+    ...createRuleData(),
+    schedule: {
+      startTime: "99:99",
+      endTime: null,
+    },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 2);
+  assert.deepEqual(
+    result.rules.map((rule) => rule.id),
+    ["valid-min", "valid-max"],
+  );
+  assert.equal(result.skippedInvalidSchemaCount, 3);
 });
 
 test("creates notification request with stable document id", async () => {

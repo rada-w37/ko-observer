@@ -247,6 +247,9 @@ function normalizeDetailConditions(value: unknown): NotificationDetailConditionR
     if (normalizedChild === null) {
       return null;
     }
+    if (normalizedChild.type === "group" && normalizedChild.children.length === 0) {
+      continue;
+    }
     children.push(normalizedChild);
   }
 
