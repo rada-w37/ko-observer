@@ -296,6 +296,26 @@ test("normalizes rendered title to 120 chars when template expansion is longer",
   assert.equal(result.request.message.title, `${"x".repeat(119)}…`);
 });
 
+test("normalizes rendered title without breaking emoji surrogate pairs", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      message: {
+        usernameTemplate: "KOO",
+        mention: { type: "none" },
+        titleTemplate: `${"a".repeat(118)}😀bc`,
+        bodyTemplate: "body",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(Array.from(result.request.message.title).length, 120);
+  assert.equal(result.request.message.title, `${"a".repeat(118)}😀…`);
+  assert.equal(result.request.message.title.includes("�"), false);
+});
+
 test("keeps rendered title unchanged when it is within 120 chars", () => {
   const title = "x".repeat(120);
   const result = evaluateNotificationRule(

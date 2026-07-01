@@ -353,11 +353,13 @@ function renderTemplate(
 }
 
 function normalizeMessageTitle(title: string): string {
-  if (title.length <= MESSAGE_TITLE_MAX_LENGTH) {
+  const titleCharacters = Array.from(title);
+  if (titleCharacters.length <= MESSAGE_TITLE_MAX_LENGTH) {
     return title;
   }
 
-  return `${title.slice(0, MESSAGE_TITLE_MAX_LENGTH - TRUNCATED_TITLE_SUFFIX.length)}${TRUNCATED_TITLE_SUFFIX}`;
+  const suffixLength = Array.from(TRUNCATED_TITLE_SUFFIX).length;
+  return `${titleCharacters.slice(0, MESSAGE_TITLE_MAX_LENGTH - suffixLength).join("")}${TRUNCATED_TITLE_SUFFIX}`;
 }
 
 function isTemporarilySuspended(
