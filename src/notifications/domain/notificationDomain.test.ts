@@ -238,6 +238,44 @@ test("renders templates and mention text", () => {
   assert.equal(result.request.message.body, "2/5 20:55");
 });
 
+test("allows empty body and username templates in rendered requests", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      message: {
+        usernameTemplate: "",
+        mention: { type: "none" },
+        titleTemplate: "title",
+        bodyTemplate: "",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.message.username, "");
+  assert.equal(result.request.message.title, "title");
+  assert.equal(result.request.message.body, "");
+});
+
+test("allows username templates that become blank after trimming", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      message: {
+        usernameTemplate: "   ",
+        mention: { type: "none" },
+        titleTemplate: "title",
+        bodyTemplate: "body",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.message.username.trim(), "");
+});
+
 test("creates stable request id and duplicate key components", () => {
   const rule = createRule();
   const withId = evaluateNotificationRule(rule, createObservation());

@@ -201,6 +201,49 @@ test("creates notification request with stable document id", async () => {
   assert.equal(stored?.status, "pending");
 });
 
+test("loads and creates requests with empty message body and username", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "empty-message-rule", {
+    ...createRuleData(),
+    message: {
+      usernameTemplate: "",
+      mention: { type: "none" },
+      titleTemplate: "{隲｡・ｰ霓､・ｹ陷ｷ髢､",
+      bodyTemplate: "",
+    },
+  });
+
+  const loaded = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+  assert.equal(loaded.rules.length, 1);
+  assert.deepEqual(loaded.rules[0]?.message, {
+    usernameTemplate: "",
+    mention: { type: "none" },
+    titleTemplate: "{隲｡・ｰ霓､・ｹ陷ｷ髢､",
+    bodyTemplate: "",
+  });
+
+  await createNotificationRequest(
+    firestore as unknown as Firestore,
+    "request-empty-message",
+    createRequest({
+      message: {
+        username: "",
+        mentionText: "",
+        title: "title",
+        body: "",
+      },
+    }),
+  );
+
+  const stored = firestore.requestData.get("request-empty-message");
+  assert.deepEqual(stored?.message, {
+    username: "",
+    mentionText: "",
+    title: "title",
+    body: "",
+  });
+});
+
 test("treats already existing notification request as duplicate", async () => {
   const firestore = new FakeFirestore();
   await createNotificationRequest(firestore as unknown as Firestore, "request-a", createRequest());
@@ -250,7 +293,7 @@ function createRuleData(): Record<string, unknown> {
   };
 }
 
-function createRequest(): NotificationRequest {
+function createRequest(overrides: Partial<NotificationRequest> = {}): NotificationRequest {
   return {
     guildId: "guild-a",
     battleType: "guildBattle",
@@ -278,6 +321,7 @@ function createRequest(): NotificationRequest {
     },
     status: "pending",
     createdAt: new Date("2026-06-17T11:55:00.000Z"),
+    ...overrides,
   };
 }
 

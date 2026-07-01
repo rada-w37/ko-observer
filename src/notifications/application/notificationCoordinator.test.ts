@@ -131,6 +131,36 @@ test("creates notification request from Grand Battle observation", async () => {
   );
 });
 
+test("creates notification request when body and username are empty", async () => {
+  const createdRequests: NotificationRequest[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({
+        message: {
+          usernameTemplate: "",
+          mention: { type: "none" },
+          titleTemplate: "{隲｡・ｰ霓､・ｹ陷ｷ髢､",
+          bodyTemplate: "",
+        },
+      }),
+    ],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRequests.push(request);
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observe(createObservation());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(flushed.createdCount, 1);
+  assert.equal(createdRequests.length, 1);
+  assert.equal(createdRequests[0]?.message.username, "");
+  assert.equal(createdRequests[0]?.message.body, "");
+});
+
 test("does not fall back when Firestore create fails with non-duplicate error", async () => {
   const warnings: string[] = [];
   const createdRuleIds: string[] = [];
