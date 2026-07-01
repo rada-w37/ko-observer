@@ -13,6 +13,7 @@ import {
 const GUILD_SHARES_COLLECTION = "guildShares";
 const NOTIFICATION_RULES_COLLECTION = "notificationRules";
 const NOTIFICATION_REQUESTS_COLLECTION = "notificationRequests";
+const TITLE_TEMPLATE_MAX_LENGTH = 120;
 
 export type LoadNotificationRulesResult = {
   rules: NotificationRule[];
@@ -330,6 +331,9 @@ function normalizeMessage(value: unknown): NotificationRule["message"] | null {
     typeof bodyTemplate !== "string" ||
     mention === null
   ) {
+    return null;
+  }
+  if (titleTemplate.trim().length === 0 || titleTemplate.length > TITLE_TEMPLATE_MAX_LENGTH) {
     return null;
   }
 

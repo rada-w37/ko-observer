@@ -244,6 +244,54 @@ test("loads and creates requests with empty message body and username", async ()
   });
 });
 
+test("requires title template and accepts raw summary up to 120 chars", async () => {
+  const firestore = new FakeFirestore();
+  const maxLengthTitle = "x".repeat(120);
+  firestore.seedRule("guild-a", "valid-summary", {
+    ...createRuleData(),
+    message: {
+      usernameTemplate: "",
+      mention: { type: "none" },
+      titleTemplate: maxLengthTitle,
+      bodyTemplate: "",
+    },
+  });
+  firestore.seedRule("guild-a", "empty-summary", {
+    ...createRuleData(),
+    message: {
+      usernameTemplate: "",
+      mention: { type: "none" },
+      titleTemplate: "",
+      bodyTemplate: "",
+    },
+  });
+  firestore.seedRule("guild-a", "blank-summary", {
+    ...createRuleData(),
+    message: {
+      usernameTemplate: "",
+      mention: { type: "none" },
+      titleTemplate: "   ",
+      bodyTemplate: "",
+    },
+  });
+  firestore.seedRule("guild-a", "too-long-summary", {
+    ...createRuleData(),
+    message: {
+      usernameTemplate: "",
+      mention: { type: "none" },
+      titleTemplate: "x".repeat(121),
+      bodyTemplate: "",
+    },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 1);
+  assert.equal(result.rules[0]?.id, "valid-summary");
+  assert.equal(result.rules[0]?.message.titleTemplate, maxLengthTitle);
+  assert.equal(result.skippedInvalidSchemaCount, 3);
+});
+
 test("treats already existing notification request as duplicate", async () => {
   const firestore = new FakeFirestore();
   await createNotificationRequest(firestore as unknown as Firestore, "request-a", createRequest());
