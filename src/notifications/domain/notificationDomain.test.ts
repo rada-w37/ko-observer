@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GVG_CASTLE_STATE } from "../../mentemori/types.js";
 import {
   compareNotificationRulePriority,
   createFallbackBaseName,
   deriveBattleSideFromCastleStatus,
   evaluateNotificationRule,
   parseStartTimeMinutes,
+  resolveDisplayGuildSides,
   type NotificationObservation,
   type NotificationRule,
 } from "./notificationDomain.js";
@@ -224,7 +226,7 @@ test("renders templates and mention text", () => {
         usernameTemplate: "{通知ルール名}",
         mention: { type: "custom", customText: "<@123> " },
         titleTemplate: "{拠点名} {侵攻ギルド}",
-        bodyTemplate: "{防衛数}/{侵攻数} {通知時刻}",
+        bodyTemplate: "{防衛ギルド} {防衛数}/{侵攻数} {通知時刻}",
       },
     }),
     createObservation(),
@@ -235,7 +237,83 @@ test("renders templates and mention text", () => {
   assert.equal(result.request.message.username, "Rule A");
   assert.equal(result.request.message.mentionText, "<@123>");
   assert.equal(result.request.message.title, "ブラッセル Attacker A");
-  assert.equal(result.request.message.body, "2/5 20:55");
+  assert.equal(result.request.message.body, "Owner A 2/5 20:55");
+});
+
+test("renders attack and defense guild templates from gvg castle state", () => {
+  const cases = [
+    {
+      name: "inBattle",
+      gvgCastleState: GVG_CASTLE_STATE.activeDeclared,
+      expectedTitle: "Attacker A/Owner A",
+      expectedAttackGuildId: "222222222001",
+      expectedDefenseGuildId: "111111111001",
+    },
+    {
+      name: "fallen",
+      gvgCastleState: GVG_CASTLE_STATE.activeBattle,
+      expectedTitle: "Owner A/Attacker A",
+      expectedAttackGuildId: "111111111001",
+      expectedDefenseGuildId: "222222222001",
+    },
+    {
+      name: "counterattack",
+      gvgCastleState: GVG_CASTLE_STATE.activeCounterattack,
+      expectedTitle: "Owner A/Attacker A",
+      expectedAttackGuildId: "111111111001",
+      expectedDefenseGuildId: "222222222001",
+    },
+    {
+      name: "counterattackSuccessful",
+      gvgCastleState: GVG_CASTLE_STATE.activeCounterattackSuccessful,
+      expectedTitle: "不明/Owner A",
+      expectedAttackGuildId: null,
+      expectedDefenseGuildId: "111111111001",
+    },
+    {
+      name: "idle",
+      gvgCastleState: GVG_CASTLE_STATE.inactive,
+      expectedTitle: "不明/Owner A",
+      expectedAttackGuildId: null,
+      expectedDefenseGuildId: "111111111001",
+    },
+    {
+      name: "unknown",
+      gvgCastleState: 99,
+      expectedTitle: "不明/不明",
+      expectedAttackGuildId: null,
+      expectedDefenseGuildId: null,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const result = evaluateNotificationRule(
+      createRule({
+        message: {
+          usernameTemplate: "",
+          mention: { type: "none" },
+          titleTemplate: "{侵攻ギルド}/{防衛ギルド}",
+          bodyTemplate: testCase.name,
+        },
+      }),
+      createObservation({
+        gvgCastleState: testCase.gvgCastleState,
+        ...resolveDisplayGuildSides({
+          gvgCastleState: testCase.gvgCastleState,
+          ownerGuildId: "111111111001",
+          ownerGuildName: "Owner A",
+          attackerGuildId: "222222222001",
+          attackerGuildName: "Attacker A",
+        }),
+      }),
+    );
+
+    assert.equal(result.status, "matched");
+    if (result.status !== "matched") return;
+    assert.equal(result.request.message.title, testCase.expectedTitle, testCase.name);
+    assert.equal(result.request.attackGuildId, testCase.expectedAttackGuildId, testCase.name);
+    assert.equal(result.request.defenseGuildId, testCase.expectedDefenseGuildId, testCase.name);
+  }
 });
 
 test("leaves old defense count template variable unchanged", () => {
@@ -379,6 +457,35 @@ test("creates stable request id and duplicate key components", () => {
     "111111111001:guildBattle:1001:2026-06-17:rule-a:castle-1:no-attacker",
   );
   assert.equal(unknown.request.attackerGuildName, "不明");
+});
+
+test("keeps raw attacker fields and duplicate key when display attack side is reversed", () => {
+  const result = evaluateNotificationRule(
+    createRule(),
+    createObservation({
+      gvgCastleState: GVG_CASTLE_STATE.activeBattle,
+      ...resolveDisplayGuildSides({
+        gvgCastleState: GVG_CASTLE_STATE.activeBattle,
+        ownerGuildId: "111111111001",
+        ownerGuildName: "Owner A",
+        attackerGuildId: "222222222001",
+        attackerGuildName: "Attacker A",
+      }),
+    }),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.attackerGuildId, "222222222001");
+  assert.equal(result.request.attackerGuildName, "Attacker A");
+  assert.equal(result.request.attackGuildId, "111111111001");
+  assert.equal(result.request.attackGuildName, "Owner A");
+  assert.equal(result.request.defenseGuildId, "222222222001");
+  assert.equal(result.request.defenseGuildName, "Attacker A");
+  assert.equal(
+    result.request.duplicateKey,
+    "111111111001:guildBattle:1001:2026-06-17:rule-a:castle-1:222222222001",
+  );
 });
 
 test("filters rules by battleSide derived from castle status", () => {
@@ -578,9 +685,15 @@ function createObservation(
     battleType: "guildBattle",
     castleId: 1,
     castleName: "ブラッセル",
+    gvgCastleState: GVG_CASTLE_STATE.activeDeclared,
     ownerGuildId: "111111111001",
+    ownerGuildName: "Owner A",
     attackerGuildId: "222222222001",
     attackerGuildName: "Attacker A",
+    attackGuildId: "222222222001",
+    attackGuildName: "Attacker A",
+    defenseGuildId: "111111111001",
+    defenseGuildName: "Owner A",
     defenseCount: 2,
     attackCount: 5,
     observedAt: new Date("2026-06-17T11:55:00.000Z"),

@@ -16,6 +16,7 @@ import type {
 } from "../notifications/application/notificationCoordinator.js";
 import {
   createFallbackBaseName,
+  resolveDisplayGuildSides,
   type NotificationBattleType,
   type NotificationObservation,
 } from "../notifications/domain/notificationDomain.js";
@@ -253,13 +254,22 @@ export async function runPhase5KoObserveLoop(
       const previousState = castleStates.get(message.castleId);
       const ownerGuildId = normalizeOptionalGuildId(message.guildId);
       const attackerGuildId = normalizeOptionalGuildId(message.attackerGuildId);
+      const ownerGuildName = getGuildName(message.guildId);
+      const attackerGuildName = getGuildName(message.attackerGuildId);
+      const displayGuildSides = resolveDisplayGuildSides({
+        gvgCastleState: message.gvgCastleState,
+        ownerGuildId,
+        ownerGuildName,
+        attackerGuildId,
+        attackerGuildName,
+      });
       logCastleStatusMessage(message, ownerGuildId, attackerGuildId);
       const result = applyKoObservation(previousState, {
         castleId: message.castleId,
         defenderGuildId: ownerGuildId,
-        defenderGuildName: getGuildName(message.guildId),
+        defenderGuildName: ownerGuildName,
         attackerGuildId,
-        attackerGuildName: getGuildName(message.attackerGuildId),
+        attackerGuildName,
         defensePartyCount: message.defensePartyCount,
         attackPartyCount: message.attackPartyCount,
         koCount: message.lastWinPartyKnockOutCount,
@@ -282,9 +292,12 @@ export async function runPhase5KoObserveLoop(
           battleType: notificationBattleType,
           castleId: message.castleId,
           castleName: resolvedCastleName ?? createFallbackBaseName(message.castleId),
+          gvgCastleState: message.gvgCastleState,
           ownerGuildId,
+          ownerGuildName,
           attackerGuildId,
-          attackerGuildName: getGuildName(message.attackerGuildId),
+          attackerGuildName,
+          ...displayGuildSides,
           defenseCount: message.defensePartyCount,
           attackCount: message.attackPartyCount,
           observedAt: receivedAt,

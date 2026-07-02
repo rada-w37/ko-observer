@@ -279,6 +279,15 @@ test("creates notification request with stable document id", async () => {
   const stored = firestore.requestData.get("request-a");
   assert.equal(stored?.guildId, "guild-a");
   assert.equal(stored?.status, "pending");
+  assert.equal(stored?.gvgCastleState, 1);
+  assert.equal(stored?.ownerGuildId, "guild-a");
+  assert.equal(stored?.ownerGuildName, "Guild A");
+  assert.equal(stored?.attackerGuildId, "guild-b");
+  assert.equal(stored?.attackerGuildName, "Guild B");
+  assert.equal(stored?.attackGuildId, "guild-b");
+  assert.equal(stored?.attackGuildName, "Guild B");
+  assert.equal(stored?.defenseGuildId, "guild-a");
+  assert.equal(stored?.defenseGuildName, "Guild A");
 });
 
 test("loads and creates requests with empty message body and username", async () => {
@@ -431,8 +440,15 @@ function createRequest(overrides: Partial<NotificationRequest> = {}): Notificati
     baseId: "castle-1",
     baseName: "ブラッセル",
     castleName: "ブラッセル",
+    gvgCastleState: 1,
+    ownerGuildId: "guild-a",
+    ownerGuildName: "Guild A",
     attackerGuildId: "guild-b",
     attackerGuildName: "Guild B",
+    attackGuildId: "guild-b",
+    attackGuildName: "Guild B",
+    defenseGuildId: "guild-a",
+    defenseGuildName: "Guild A",
     defenseCount: 2,
     attackCount: 5,
     message: {

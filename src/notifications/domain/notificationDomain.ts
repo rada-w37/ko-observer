@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { GVG_CASTLE_STATE } from "../../mentemori/types.js";
 import { UNKNOWN_CASTLE_NAME } from "./castleName.js";
 
 export type NotificationBattleType = "guildBattle" | "grandBattle";
@@ -63,9 +64,15 @@ export type NotificationObservation = {
   battleType: NotificationBattleType;
   castleId: number;
   castleName: string;
+  gvgCastleState: number;
   ownerGuildId: string | null;
+  ownerGuildName: string | null;
   attackerGuildId: string | null;
   attackerGuildName: string | null;
+  attackGuildId: string | null;
+  attackGuildName: string | null;
+  defenseGuildId: string | null;
+  defenseGuildName: string | null;
   defenseCount: number;
   attackCount: number;
   observedAt: Date;
@@ -83,8 +90,15 @@ export type NotificationRequest = {
   baseId: string;
   baseName: string;
   castleName: string;
+  gvgCastleState: number;
+  ownerGuildId: string | null;
+  ownerGuildName: string;
   attackerGuildId?: string;
   attackerGuildName: string;
+  attackGuildId: string | null;
+  attackGuildName: string;
+  defenseGuildId: string | null;
+  defenseGuildName: string;
   defenseCount: number;
   attackCount: number;
   message: {
@@ -118,6 +132,7 @@ export type NotificationEvaluationResult =
 const TEMPLATE_VARIABLES = {
   baseName: "{拠点名}",
   attackerGuild: "{侵攻ギルド}",
+  defenseGuild: "{防衛ギルド}",
   defenseCount: "{防衛数}",
   attackCount: "{侵攻数}",
   notificationTime: "{通知時刻}",
@@ -196,6 +211,12 @@ export function createNotificationRequest(
   const battleDate = getJstDateString(observation.observedAt);
   const notificationTime = getJstTimeString(observation.observedAt);
   const attackerGuildName = resolveAttackerGuildName(observation);
+  const ownerGuildName = resolveGuildName(observation.ownerGuildId, observation.ownerGuildName);
+  const attackGuildName = resolveGuildName(observation.attackGuildId, observation.attackGuildName);
+  const defenseGuildName = resolveGuildName(
+    observation.defenseGuildId,
+    observation.defenseGuildName,
+  );
   const duplicateKey = createDuplicateKey({
     guildId: observation.guildId,
     battleType: observation.battleType,
@@ -215,24 +236,34 @@ export function createNotificationRequest(
     baseId,
     baseName: observation.castleName,
     castleName: observation.castleName,
+    gvgCastleState: observation.gvgCastleState,
+    ownerGuildId: observation.ownerGuildId,
+    ownerGuildName,
     ...(observation.attackerGuildId ? { attackerGuildId: observation.attackerGuildId } : {}),
     attackerGuildName,
+    attackGuildId: observation.attackGuildId,
+    attackGuildName,
+    defenseGuildId: observation.defenseGuildId,
+    defenseGuildName,
     defenseCount: observation.defenseCount,
     attackCount: observation.attackCount,
     message: {
       username: renderTemplate(rule.message.usernameTemplate, rule, observation, {
-        attackerGuildName,
+        attackGuildName,
+        defenseGuildName,
         notificationTime,
       }),
       mentionText: renderMention(rule.message.mention),
       title: normalizeMessageTitle(
         renderTemplate(rule.message.titleTemplate, rule, observation, {
-          attackerGuildName,
+          attackGuildName,
+          defenseGuildName,
           notificationTime,
         }),
       ),
       body: renderTemplate(rule.message.bodyTemplate, rule, observation, {
-        attackerGuildName,
+        attackGuildName,
+        defenseGuildName,
         notificationTime,
       }),
     },
@@ -254,6 +285,41 @@ export function createNotificationRequestId(duplicateKey: string): string {
 
 export function createFallbackBaseName(_castleId: number): string {
   return UNKNOWN_CASTLE_NAME;
+}
+
+export function resolveDisplayGuildSides(input: {
+  gvgCastleState: number;
+  ownerGuildId: string | null;
+  ownerGuildName: string | null;
+  attackerGuildId: string | null;
+  attackerGuildName: string | null;
+}): {
+  attackGuildId: string | null;
+  attackGuildName: string | null;
+  defenseGuildId: string | null;
+  defenseGuildName: string | null;
+} {
+  const ownerSide = {
+    guildId: input.ownerGuildId,
+    guildName: resolveNullableGuildName(input.ownerGuildId, input.ownerGuildName),
+  };
+  const attackerSide = {
+    guildId: input.attackerGuildId,
+    guildName: resolveNullableGuildName(input.attackerGuildId, input.attackerGuildName),
+  };
+
+  switch (input.gvgCastleState) {
+    case GVG_CASTLE_STATE.activeDeclared:
+      return createDisplayGuildSides(attackerSide, ownerSide);
+    case GVG_CASTLE_STATE.activeBattle:
+    case GVG_CASTLE_STATE.activeCounterattack:
+      return createDisplayGuildSides(ownerSide, attackerSide);
+    case GVG_CASTLE_STATE.activeCounterattackSuccessful:
+    case GVG_CASTLE_STATE.inactive:
+      return createDisplayGuildSides(null, ownerSide);
+    default:
+      return createDisplayGuildSides(null, null);
+  }
 }
 
 export function deriveBattleSideFromCastleStatus(input: {
@@ -339,13 +405,15 @@ function renderTemplate(
   rule: NotificationRule,
   observation: NotificationObservation,
   values: {
-    attackerGuildName: string;
+    attackGuildName: string;
+    defenseGuildName: string;
     notificationTime: string;
   },
 ): string {
   return template
     .replaceAll(TEMPLATE_VARIABLES.baseName, observation.castleName)
-    .replaceAll(TEMPLATE_VARIABLES.attackerGuild, values.attackerGuildName)
+    .replaceAll(TEMPLATE_VARIABLES.attackerGuild, values.attackGuildName)
+    .replaceAll(TEMPLATE_VARIABLES.defenseGuild, values.defenseGuildName)
     .replaceAll(TEMPLATE_VARIABLES.defenseCount, observation.defenseCount.toString())
     .replaceAll(TEMPLATE_VARIABLES.attackCount, observation.attackCount.toString())
     .replaceAll(TEMPLATE_VARIABLES.notificationTime, values.notificationTime)
@@ -446,13 +514,38 @@ function resolveAttackerKey(observation: NotificationObservation): string {
 }
 
 function resolveAttackerGuildName(observation: NotificationObservation): string {
-  if (observation.attackerGuildName) {
-    return observation.attackerGuildName;
+  return resolveGuildName(observation.attackerGuildId, observation.attackerGuildName);
+}
+
+function resolveGuildName(guildId: string | null, guildName: string | null): string {
+  return resolveNullableGuildName(guildId, guildName) ?? "不明";
+}
+
+function resolveNullableGuildName(guildId: string | null, guildName: string | null): string | null {
+  if (guildName) {
+    return guildName;
   }
-  if (observation.attackerGuildId) {
-    return `ギルド${observation.attackerGuildId}`;
+  if (guildId) {
+    return `ギルド${guildId}`;
   }
-  return "不明";
+  return null;
+}
+
+function createDisplayGuildSides(
+  attackSide: { guildId: string | null; guildName: string | null } | null,
+  defenseSide: { guildId: string | null; guildName: string | null } | null,
+): {
+  attackGuildId: string | null;
+  attackGuildName: string | null;
+  defenseGuildId: string | null;
+  defenseGuildName: string | null;
+} {
+  return {
+    attackGuildId: attackSide?.guildId ?? null,
+    attackGuildName: attackSide?.guildName ?? null,
+    defenseGuildId: defenseSide?.guildId ?? null,
+    defenseGuildName: defenseSide?.guildName ?? null,
+  };
 }
 
 function getJstDateString(date: Date): string {
