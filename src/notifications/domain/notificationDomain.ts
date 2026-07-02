@@ -118,7 +118,7 @@ export type NotificationEvaluationResult =
 const TEMPLATE_VARIABLES = {
   baseName: "{拠点名}",
   attackerGuild: "{侵攻ギルド}",
-  defenseCount: "{防御数}",
+  defenseCount: "{防衛数}",
   attackCount: "{侵攻数}",
   notificationTime: "{通知時刻}",
   ruleName: "{通知ルール名}",

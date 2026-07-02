@@ -224,7 +224,7 @@ test("renders templates and mention text", () => {
         usernameTemplate: "{通知ルール名}",
         mention: { type: "custom", customText: "<@123> " },
         titleTemplate: "{拠点名} {侵攻ギルド}",
-        bodyTemplate: "{防御数}/{侵攻数} {通知時刻}",
+        bodyTemplate: "{防衛数}/{侵攻数} {通知時刻}",
       },
     }),
     createObservation(),
@@ -236,6 +236,24 @@ test("renders templates and mention text", () => {
   assert.equal(result.request.message.mentionText, "<@123>");
   assert.equal(result.request.message.title, "ブラッセル Attacker A");
   assert.equal(result.request.message.body, "2/5 20:55");
+});
+
+test("leaves old defense count template variable unchanged", () => {
+  const result = evaluateNotificationRule(
+    createRule({
+      message: {
+        usernameTemplate: "",
+        mention: { type: "none" },
+        titleTemplate: "{拠点名}",
+        bodyTemplate: "{防御数}/{防衛数}",
+      },
+    }),
+    createObservation(),
+  );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.message.body, "{防御数}/2");
 });
 
 test("allows empty body and username templates in rendered requests", () => {
