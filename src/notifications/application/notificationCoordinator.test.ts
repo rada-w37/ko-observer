@@ -9,6 +9,7 @@ import type {
   NotificationObservation,
   NotificationRequest,
   NotificationRule,
+  NotificationRuleTick,
 } from "../domain/notificationDomain.js";
 
 test("observe enqueues request creation without awaiting it", async () => {
@@ -55,6 +56,84 @@ test("deduplicates matched requests with seenRequestIds before create", async ()
 
   assert.equal(createCount, 1);
   assert.equal(flushed.skippedCount, 1);
+});
+
+test("creates one rule-level request for repeated detail-rule-off ticks", async () => {
+  const createdRequests: NotificationRequest[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [createRule({ detailRuleEnabled: false })],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRequests.push(request);
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observeRuleTick(createRuleTick());
+  coordinator.observeRuleTick(createRuleTick());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createdRequests.length, 1);
+  assert.equal(flushed.skippedCount, 1);
+  assert.equal(createdRequests[0]?.detailRuleEnabled, false);
+  assert.equal(
+    createdRequests[0]?.duplicateKey,
+    "111111111001:guildBattle:1001:2026-06-17:rule-a:time:20:50-open",
+  );
+});
+
+test("creates separate rule-level requests for separate detail-rule-off rules", async () => {
+  const createdRuleIds: string[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({ id: "rule-a", detailRuleEnabled: false }),
+      createRule({ id: "rule-b", detailRuleEnabled: false }),
+    ],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRuleIds.push(request.ruleId);
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observeRuleTick(createRuleTick());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.deepEqual(createdRuleIds, ["rule-a", "rule-b"]);
+  assert.equal(flushed.createdCount, 2);
+});
+
+test("warns and skips detail-rule-off templates with detail-only variables", async () => {
+  const warnings: string[] = [];
+  let createCount = 0;
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({
+        detailRuleEnabled: false,
+        message: {
+          usernameTemplate: "KOO",
+          mention: { type: "none" },
+          titleTemplate: "{拠点名}",
+          bodyTemplate: "{通知ルール名}",
+        },
+      }),
+    ],
+    dryRun: false,
+    createRequest: async () => {
+      createCount += 1;
+      return { status: "created" };
+    },
+    logger: createLogger(warnings),
+  });
+
+  coordinator.observeRuleTick(createRuleTick());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createCount, 0);
+  assert.equal(flushed.createdCount, 0);
+  assert.equal(warnings.some((message) => message.includes("detail-only variables")), true);
 });
 
 test("dry-run uses only first unseen candidate by priority", async () => {
@@ -232,6 +311,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    detailRuleEnabled: true,
     battleSide: "defense",
     name: "Rule A",
     enabled: true,
@@ -240,7 +320,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
       startTime: "20:50",
       endTime: null,
     },
-    targetGuildIds: [],
+    guildFilter: [],
     detailConditions: {
       operator: "OR",
       children: [
@@ -281,6 +361,17 @@ function createObservation(
     defenseGuildName: "Owner A",
     defenseCount: 2,
     attackCount: 5,
+    observedAt: new Date("2026-06-17T11:55:00.000Z"),
+    worldId: "1001",
+    runId: "run-a",
+    ...overrides,
+  };
+}
+
+function createRuleTick(overrides: Partial<NotificationRuleTick> = {}): NotificationRuleTick {
+  return {
+    guildId: "111111111001",
+    battleType: "guildBattle",
     observedAt: new Date("2026-06-17T11:55:00.000Z"),
     worldId: "1001",
     runId: "run-a",

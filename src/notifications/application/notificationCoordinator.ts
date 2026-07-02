@@ -1,14 +1,17 @@
 import {
   compareNotificationRulePriority,
   evaluateNotificationRule,
+  evaluateRuleLevelNotification,
   type NotificationObservation,
   type NotificationRequest,
   type NotificationRule,
+  type NotificationRuleTick,
 } from "../domain/notificationDomain.js";
 import { logger as defaultLogger } from "../../shared/logger.js";
 
 export type NotificationCoordinator = {
   observe(observation: NotificationObservation): void;
+  observeRuleTick(tick: NotificationRuleTick): void;
   flush(options: { timeoutMs: number }): Promise<NotificationFlushResult>;
 };
 
@@ -86,29 +89,38 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
         });
       }
 
-      if (candidates.length === 0) {
-        return;
-      }
-
-      candidates.sort((firstCandidate, secondCandidate) =>
-        compareNotificationRulePriority(firstCandidate.rule, secondCandidate.rule),
-      );
-
-      if (this.options.dryRun) {
-        this.handleDryRunCandidates(candidates);
-        return;
-      }
-
-      if (this.pendingTasks.size >= this.maxQueueSize) {
-        this.skippedCount += 1;
-        this.logger.warn("notification queue limit reached; candidate requests skipped");
-        return;
-      }
-
-      this.enqueueCreateCandidates(candidates);
+      this.handleCandidates(candidates, { createAll: false });
     } catch (error) {
       this.failedCount += 1;
       this.logger.warn(`notification observe failed: ${formatErrorMessage(error)}`);
+    }
+  }
+
+  observeRuleTick(tick: NotificationRuleTick): void {
+    try {
+      const candidates: NotificationCandidate[] = [];
+      for (const rule of this.options.rules) {
+        const result = evaluateRuleLevelNotification(rule, tick);
+        if (result.status !== "matched") {
+          if (result.reason === "detail_rule_off_template_variables") {
+            this.logger.warn(
+              `notification rule-level template contains detail-only variables; ruleId=${rule.id}`,
+            );
+          }
+          continue;
+        }
+
+        candidates.push({
+          rule,
+          requestId: result.requestId,
+          request: result.request,
+        });
+      }
+
+      this.handleCandidates(candidates, { createAll: true });
+    } catch (error) {
+      this.failedCount += 1;
+      this.logger.warn(`notification rule tick failed: ${formatErrorMessage(error)}`);
     }
   }
 
@@ -147,15 +159,47 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
     );
   }
 
-  private enqueueCreateCandidates(candidates: NotificationCandidate[]): void {
+  private handleCandidates(
+    candidates: NotificationCandidate[],
+    options: { createAll: boolean },
+  ): void {
+    if (candidates.length === 0) {
+      return;
+    }
+
+    candidates.sort((firstCandidate, secondCandidate) =>
+      compareNotificationRulePriority(firstCandidate.rule, secondCandidate.rule),
+    );
+
+    if (this.options.dryRun) {
+      this.handleDryRunCandidates(candidates);
+      return;
+    }
+
+    if (this.pendingTasks.size >= this.maxQueueSize) {
+      this.skippedCount += 1;
+      this.logger.warn("notification queue limit reached; candidate requests skipped");
+      return;
+    }
+
+    this.enqueueCreateCandidates(candidates, options);
+  }
+
+  private enqueueCreateCandidates(
+    candidates: NotificationCandidate[],
+    options: { createAll: boolean },
+  ): void {
     let task: Promise<void>;
-    task = this.createCandidateRequestSafely(candidates).finally(() => {
+    task = this.createCandidateRequestSafely(candidates, options).finally(() => {
       this.pendingTasks.delete(task);
     });
     this.pendingTasks.add(task);
   }
 
-  private async createCandidateRequestSafely(candidates: NotificationCandidate[]): Promise<void> {
+  private async createCandidateRequestSafely(
+    candidates: NotificationCandidate[],
+    options: { createAll: boolean },
+  ): Promise<void> {
     for (const candidate of candidates) {
       if (this.seenRequestIds.has(candidate.requestId)) {
         this.skippedCount += 1;
@@ -170,7 +214,9 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
           continue;
         }
         this.createdCount += 1;
-        return;
+        if (!options.createAll) {
+          return;
+        }
       } catch (error) {
         this.failedCount += 1;
         this.logger.warn(`notification request create failed: ${formatErrorMessage(error)}`);
@@ -207,6 +253,8 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
 
 export class NoopNotificationCoordinator implements NotificationCoordinator {
   observe(_observation: NotificationObservation): void {}
+
+  observeRuleTick(_tick: NotificationRuleTick): void {}
 
   async flush(_options: { timeoutMs: number }): Promise<NotificationFlushResult> {
     return {

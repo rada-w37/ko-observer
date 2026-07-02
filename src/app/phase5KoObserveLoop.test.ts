@@ -10,6 +10,7 @@ import type {
 } from "../notifications/application/notificationCoordinator.js";
 import type {
   NotificationObservation,
+  NotificationRuleTick,
 } from "../notifications/domain/notificationDomain.js";
 
 test("initializes Grand Battle participant guildKoTotals with zero KO", async () => {
@@ -303,6 +304,106 @@ test("passes read-only notification observation after castle state update", asyn
   });
 });
 
+test("passes one rule tick per parsed payload regardless of castle status count", async () => {
+  const ticks: NotificationRuleTick[] = [];
+  const observations: NotificationObservation[] = [];
+
+  await runPhase5KoObserveLoop(createConfig({ notificationsEnabled: true }), createFirestoreStub(), {
+    createRealtimeClient: () =>
+      createRealtimeClientStub([
+        [
+          ...createCastleStatusBytes({ guildId: 111111111, attackerGuildId: 222222222 }),
+          ...createCastleStatusBytes({ guildId: 333333333, attackerGuildId: 444444444 }),
+        ],
+      ]),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "guildBattle",
+      subscriptionType: "guildBattle",
+      worldId: "1001",
+      guildId: "111111111001",
+      worldGroupId: null,
+      classId: null,
+      blockId: null,
+    }),
+    createNotificationCoordinator: async () =>
+      createNotificationCoordinatorStub({
+        observe: (observation) => {
+          observations.push(observation);
+        },
+        observeRuleTick: (tick) => {
+          ticks.push(tick);
+        },
+      }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  assert.equal(observations.length, 2);
+  assert.deepEqual(ticks, [
+    {
+      guildId: "111111111001",
+      battleType: "guildBattle",
+      observedAt: new Date("2026-06-11T12:00:02.000Z"),
+      worldId: "1001",
+      runId: "test",
+    },
+    {
+      guildId: "111111111001",
+      battleType: "guildBattle",
+      observedAt: new Date("2026-06-11T12:00:02.000Z"),
+      worldId: "1001",
+      runId: "test",
+    },
+  ]);
+});
+
+test("passes a rule tick after connect even without realtime payloads", async () => {
+  const ticks: NotificationRuleTick[] = [];
+
+  await runPhase5KoObserveLoop(createConfig({ notificationsEnabled: true }), createFirestoreStub(), {
+    createRealtimeClient: () => createRealtimeClientStub(),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "guildBattle",
+      subscriptionType: "guildBattle",
+      worldId: "1001",
+      guildId: "111111111001",
+      worldGroupId: null,
+      classId: null,
+      blockId: null,
+    }),
+    createNotificationCoordinator: async () =>
+      createNotificationCoordinatorStub({
+        observeRuleTick: (tick) => {
+          ticks.push(tick);
+        },
+      }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async () => {},
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  assert.deepEqual(ticks, [
+    {
+      guildId: "111111111001",
+      battleType: "guildBattle",
+      observedAt: new Date("2026-06-11T12:00:02.000Z"),
+      worldId: "1001",
+      runId: "test",
+    },
+  ]);
+});
+
 test("stops when guildShares has no monitor target", async () => {
   let initialized = false;
 
@@ -422,6 +523,7 @@ function createNotificationCoordinatorStub(
 ): NotificationCoordinator {
   return {
     observe: () => {},
+    observeRuleTick: () => {},
     flush: async () => ({
       timedOut: false,
       pendingCount: 0,

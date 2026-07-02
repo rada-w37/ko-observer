@@ -33,11 +33,14 @@ export type CreateNotificationRequestResult =
 type NotificationRuleData = {
   schemaVersion?: unknown;
   battleType?: unknown;
+  detailRuleEnabled?: unknown;
   battleSide?: unknown;
   name?: unknown;
   enabled?: unknown;
   sortOrder?: unknown;
   schedule?: unknown;
+  guildFilter?: unknown;
+  attackerGuildIds?: unknown;
   targetGuildIds?: unknown;
   detailConditions?: unknown;
   message?: unknown;
@@ -134,16 +137,20 @@ function normalizeNotificationRule(
   }
 
   const schedule = normalizeSchedule(data.schedule);
+  const detailRuleEnabled = normalizeDetailRuleEnabled(data.detailRuleEnabled);
   const battleSide = normalizeBattleSide(data.battleSide);
-  const targetGuildIds = normalizeTargetGuildIds(data.targetGuildIds);
-  const detailConditions = normalizeDetailConditions(data.detailConditions);
+  const guildFilter = normalizeGuildFilter(data);
+  const detailConditions = detailRuleEnabled
+    ? normalizeDetailConditions(data.detailConditions)
+    : createEmptyDetailConditionRoot();
   const message = normalizeMessage(data.message);
   const temporarySuspension = normalizeTemporarySuspension(data.temporarySuspension);
 
   if (
     schedule === null ||
+    detailRuleEnabled === null ||
     battleSide === null ||
-    targetGuildIds === null ||
+    guildFilter === null ||
     detailConditions === null ||
     message === null ||
     temporarySuspension === null
@@ -157,12 +164,13 @@ function normalizeNotificationRule(
       id: ruleId,
       schemaVersion: 2,
       battleType: data.battleType,
+      detailRuleEnabled,
       battleSide,
       name: data.name.trim(),
       enabled: data.enabled,
       sortOrder: data.sortOrder,
       schedule,
-      targetGuildIds,
+      guildFilter,
       detailConditions,
       message,
       ...(temporarySuspension === undefined ? {} : { temporarySuspension }),
@@ -178,6 +186,13 @@ function normalizeBattleSide(value: unknown): NotificationBattleSide | null {
     return value;
   }
   return null;
+}
+
+function normalizeDetailRuleEnabled(value: unknown): boolean | null {
+  if (value === undefined) {
+    return true;
+  }
+  return typeof value === "boolean" ? value : null;
 }
 
 function normalizeSchedule(value: unknown): NotificationRule["schedule"] | null {
@@ -208,7 +223,11 @@ function normalizeSchedule(value: unknown): NotificationRule["schedule"] | null 
   };
 }
 
-function normalizeTargetGuildIds(value: unknown): string[] | null {
+function normalizeGuildFilter(data: NotificationRuleData): string[] | null {
+  return normalizeGuildIdList(data.guildFilter ?? data.attackerGuildIds ?? data.targetGuildIds);
+}
+
+function normalizeGuildIdList(value: unknown): string[] | null {
   if (value === undefined) {
     return [];
   }
@@ -216,7 +235,7 @@ function normalizeTargetGuildIds(value: unknown): string[] | null {
     return null;
   }
 
-  const targetGuildIds: string[] = [];
+  const guildIds: string[] = [];
   for (const guildId of value) {
     if (typeof guildId !== "string") {
       return null;
@@ -225,15 +244,15 @@ function normalizeTargetGuildIds(value: unknown): string[] | null {
     if (trimmedGuildId.length === 0) {
       return null;
     }
-    targetGuildIds.push(trimmedGuildId);
+    guildIds.push(trimmedGuildId);
   }
 
-  const uniqueGuildIds = new Set(targetGuildIds);
-  if (uniqueGuildIds.size !== targetGuildIds.length) {
+  const uniqueGuildIds = new Set(guildIds);
+  if (uniqueGuildIds.size !== guildIds.length) {
     return null;
   }
 
-  return targetGuildIds;
+  return guildIds;
 }
 
 function normalizeDetailConditions(value: unknown): NotificationDetailConditionRoot | null {
@@ -247,10 +266,11 @@ function normalizeDetailConditions(value: unknown): NotificationDetailConditionR
     if (normalizedChild === null) {
       return null;
     }
-    if (normalizedChild.type === "group" && normalizedChild.children.length === 0) {
-      continue;
-    }
     children.push(normalizedChild);
+  }
+
+  if (children.length === 0) {
+    return null;
   }
 
   return {
@@ -278,6 +298,9 @@ function normalizeDetailConditionChild(
   if (!Array.isArray(value.children)) {
     return null;
   }
+  if (value.children.length === 0) {
+    return null;
+  }
 
   const children: NotificationDetailCondition[] = [];
   for (const child of value.children) {
@@ -295,6 +318,13 @@ function normalizeDetailConditionChild(
     type: "group",
     operator: value.operator,
     children,
+  };
+}
+
+function createEmptyDetailConditionRoot(): NotificationDetailConditionRoot {
+  return {
+    operator: "OR",
+    children: [],
   };
 }
 
@@ -417,21 +447,23 @@ function toFirestoreNotificationRequest(request: NotificationRequest): Record<st
     battleType: request.battleType,
     ruleId: request.ruleId,
     ruleName: request.ruleName,
+    detailRuleEnabled: request.detailRuleEnabled,
     duplicateKey: request.duplicateKey,
-    baseId: request.baseId,
-    baseName: request.baseName,
-    castleName: request.castleName,
-    gvgCastleState: request.gvgCastleState,
-    ownerGuildId: request.ownerGuildId,
-    ownerGuildName: request.ownerGuildName,
+    activeTimeWindow: request.activeTimeWindow,
+    ...(request.baseId === undefined ? {} : { baseId: request.baseId }),
+    ...(request.baseName === undefined ? {} : { baseName: request.baseName }),
+    ...(request.castleName === undefined ? {} : { castleName: request.castleName }),
+    ...(request.gvgCastleState === undefined ? {} : { gvgCastleState: request.gvgCastleState }),
+    ...(request.ownerGuildId === undefined ? {} : { ownerGuildId: request.ownerGuildId }),
+    ...(request.ownerGuildName === undefined ? {} : { ownerGuildName: request.ownerGuildName }),
     ...(request.attackerGuildId ? { attackerGuildId: request.attackerGuildId } : {}),
-    attackerGuildName: request.attackerGuildName,
-    attackGuildId: request.attackGuildId,
-    attackGuildName: request.attackGuildName,
-    defenseGuildId: request.defenseGuildId,
-    defenseGuildName: request.defenseGuildName,
-    defenseCount: request.defenseCount,
-    attackCount: request.attackCount,
+    ...(request.attackerGuildName === undefined ? {} : { attackerGuildName: request.attackerGuildName }),
+    ...(request.attackGuildId === undefined ? {} : { attackGuildId: request.attackGuildId }),
+    ...(request.attackGuildName === undefined ? {} : { attackGuildName: request.attackGuildName }),
+    ...(request.defenseGuildId === undefined ? {} : { defenseGuildId: request.defenseGuildId }),
+    ...(request.defenseGuildName === undefined ? {} : { defenseGuildName: request.defenseGuildName }),
+    ...(request.defenseCount === undefined ? {} : { defenseCount: request.defenseCount }),
+    ...(request.attackCount === undefined ? {} : { attackCount: request.attackCount }),
     message: request.message,
     source: {
       ...request.source,

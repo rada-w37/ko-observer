@@ -138,6 +138,7 @@ export async function runPhase5KoObserveLoop(
     config,
     guildId: subscriptionScope.guildId,
   });
+  const notificationBattleType = toNotificationBattleType(subscriptionScope.battleType);
   const subscriptionPayload = createSubscriptionPayload(subscriptionScope);
   const initializeResult = await initializeRun(firestore, startedAt);
   logger.info(
@@ -195,6 +196,7 @@ export async function runPhase5KoObserveLoop(
   logger.info(createScopeLogMessage("websocket connecting", subscriptionScope));
   logSubscriptionPayload(subscriptionScope, subscriptionPayload);
   await realtimeClient.connect({ payload: subscriptionPayload });
+  observeRuleTickForCurrentTime(now());
 
   try {
     while (now().getTime() < endAtMilliseconds) {
@@ -241,6 +243,7 @@ export async function runPhase5KoObserveLoop(
       castleStatusMessages.length,
       unknownMessages.length,
     );
+    observeRuleTickForCurrentTime(receivedAt);
 
     for (const message of parserResult.messages) {
       if (message.type === "guild" && message.guildId && message.guildName) {
@@ -279,7 +282,6 @@ export async function runPhase5KoObserveLoop(
       counters.unknownVictimKoAdds += Math.max(unknownVictimKoDelta, 0);
       logKoObserveDecision(message, previousState, result, ownerGuildId, attackerGuildId, unknownVictimKoDelta);
       castleStates.set(message.castleId, result.state);
-      const notificationBattleType = toNotificationBattleType(subscriptionScope.battleType);
       if (subscriptionScope.guildId && notificationBattleType) {
         const resolvedCastleName = resolveCastleName(notificationBattleType, message.castleId);
         if (resolvedCastleName === null) {
@@ -335,6 +337,21 @@ export async function runPhase5KoObserveLoop(
     await persistGuildKoTotals(firestore, writeInput);
     counters.guildKoTotalsUpdateCount += writeInput.size;
     guildTotalsDirty = false;
+  }
+
+  function observeRuleTickForCurrentTime(observedAt: Date): void {
+    if (!subscriptionScope.guildId || !notificationBattleType) {
+      return;
+    }
+
+    observeRuleTickSafely(notificationCoordinator, {
+      guildId: subscriptionScope.guildId,
+      battleType: notificationBattleType,
+      observedAt,
+      worldId: subscriptionScope.worldId,
+      ...(subscriptionScope.blockId === null ? {} : { blockId: subscriptionScope.blockId }),
+      runId: config.runId,
+    });
   }
 
   async function writeInitialGrandBattleGuildTotals(
@@ -442,6 +459,17 @@ export async function runPhase5KoObserveLoop(
         `koDelta=${koDelta ?? ""} victim=${victim} shouldPersistCastle=${result.shouldPersistCastle} ` +
         `shouldUpdateGuildTotals=${result.shouldUpdateGuildTotals} reason=${reason}`,
     );
+  }
+}
+
+function observeRuleTickSafely(
+  notificationCoordinator: NotificationCoordinator,
+  tick: Parameters<NotificationCoordinator["observeRuleTick"]>[0],
+): void {
+  try {
+    notificationCoordinator.observeRuleTick(tick);
+  } catch (error) {
+    logger.warn(`notification rule tick failed in loop: ${formatErrorMessage(error)}`);
   }
 }
 

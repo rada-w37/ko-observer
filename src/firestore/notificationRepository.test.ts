@@ -14,7 +14,7 @@ test("loads Guild Battle and Grand Battle v2 rules and classifies skipped docume
   firestore.seedRule("guild-a", "grand-rule", {
     ...createRuleData(),
     battleType: "grandBattle",
-    targetGuildIds: [],
+    guildFilter: [],
   });
   firestore.seedRule("guild-a", "invalid-rule", {
     ...createRuleData(),
@@ -31,6 +31,7 @@ test("loads Guild Battle and Grand Battle v2 rules and classifies skipped docume
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    detailRuleEnabled: true,
     battleSide: "defense",
     name: "Rule A",
     enabled: true,
@@ -39,7 +40,7 @@ test("loads Guild Battle and Grand Battle v2 rules and classifies skipped docume
       startTime: "20:50",
       endTime: null,
     },
-    targetGuildIds: ["guild-b", "guild-c"],
+    guildFilter: ["guild-b", "guild-c"],
     detailConditions: {
       operator: "OR",
       children: [
@@ -64,7 +65,7 @@ test("loads Guild Battle and Grand Battle v2 rules and classifies skipped docume
   assert.equal(result.rules[1]?.id, "grand-rule");
   assert.equal(result.rules[1]?.battleType, "grandBattle");
   assert.equal(result.rules[1]?.battleSide, "defense");
-  assert.deepEqual(result.rules[1]?.targetGuildIds, []);
+  assert.deepEqual(result.rules[1]?.guildFilter, []);
   assert.equal(firestore.collectionIds.includes("notificationDestinations"), false);
 });
 
@@ -73,24 +74,40 @@ test("uses document id as canonical and defaults missing optional v2 fields", as
   firestore.seedRule("guild-a", "document-rule-id", {
     ...createRuleData(),
     id: "mismatched-data-id",
+    detailRuleEnabled: undefined,
     battleSide: undefined,
-    targetGuildIds: undefined,
+    guildFilter: undefined,
   });
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
   assert.equal(result.rules.length, 1);
   assert.equal(result.rules[0]?.id, "document-rule-id");
+  assert.equal(result.rules[0]?.detailRuleEnabled, true);
   assert.equal(result.rules[0]?.battleSide, "defense");
-  assert.deepEqual(result.rules[0]?.targetGuildIds, []);
+  assert.deepEqual(result.rules[0]?.guildFilter, []);
   assert.equal(result.skippedInvalidSchemaCount, 0);
+});
+
+test("normalizes legacy attackerGuildIds into guildFilter", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "legacy-filter", {
+    ...createRuleData(),
+    guildFilter: undefined,
+    attackerGuildIds: [" guild-x ", "guild-y"],
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 1);
+  assert.deepEqual(result.rules[0]?.guildFilter, ["guild-x", "guild-y"]);
 });
 
 test("skips invalid v2 schema fields", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "invalid-target", {
     ...createRuleData(),
-    targetGuildIds: ["guild-b", " guild-b "],
+    guildFilter: ["guild-b", " guild-b "],
   });
   firestore.seedRule("guild-a", "invalid-end-time", {
     ...createRuleData(),
@@ -143,7 +160,7 @@ test("skips invalid v2 schema fields", async () => {
   assert.equal(result.skippedInvalidSchemaCount, 5);
 });
 
-test("loads rules without detail condition children", async () => {
+test("skips detail-rule-on rules without detail condition children", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "empty-root", {
     ...createRuleData(),
@@ -168,19 +185,11 @@ test("loads rules without detail condition children", async () => {
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
-  assert.equal(result.rules.length, 2);
-  assert.deepEqual(result.rules[0]?.detailConditions, {
-    operator: "OR",
-    children: [],
-  });
-  assert.deepEqual(result.rules[1]?.detailConditions, {
-    operator: "OR",
-    children: [],
-  });
-  assert.equal(result.skippedInvalidSchemaCount, 0);
+  assert.equal(result.rules.length, 0);
+  assert.equal(result.skippedInvalidSchemaCount, 2);
 });
 
-test("removes empty groups while keeping non-empty detail conditions", async () => {
+test("skips detail-rule-on rules with empty detail condition groups", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "mixed-groups", {
     ...createRuleData(),
@@ -204,17 +213,25 @@ test("removes empty groups while keeping non-empty detail conditions", async () 
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
+  assert.equal(result.rules.length, 0);
+  assert.equal(result.skippedInvalidSchemaCount, 1);
+});
+
+test("loads detail-rule-off rules without detail conditions", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "time-only", {
+    ...createRuleData(),
+    detailRuleEnabled: false,
+    detailConditions: undefined,
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
   assert.equal(result.rules.length, 1);
+  assert.equal(result.rules[0]?.detailRuleEnabled, false);
   assert.deepEqual(result.rules[0]?.detailConditions, {
     operator: "OR",
-    children: [
-      {
-        type: "condition",
-        field: "defenseCount",
-        operator: "<=",
-        value: 3,
-      },
-    ],
+    children: [],
   });
 });
 
@@ -279,6 +296,8 @@ test("creates notification request with stable document id", async () => {
   const stored = firestore.requestData.get("request-a");
   assert.equal(stored?.guildId, "guild-a");
   assert.equal(stored?.status, "pending");
+  assert.equal(stored?.detailRuleEnabled, true);
+  assert.equal(stored?.activeTimeWindow, "20:50-open");
   assert.equal(stored?.gvgCastleState, 1);
   assert.equal(stored?.ownerGuildId, "guild-a");
   assert.equal(stored?.ownerGuildName, "Guild A");
@@ -398,6 +417,7 @@ function createRuleData(): Record<string, unknown> {
   return {
     schemaVersion: 2,
     battleType: "guildBattle",
+    detailRuleEnabled: true,
     battleSide: "defense",
     name: "Rule A",
     enabled: true,
@@ -406,7 +426,7 @@ function createRuleData(): Record<string, unknown> {
       startTime: "20:50",
       endTime: null,
     },
-    targetGuildIds: [" guild-b ", "guild-c"],
+    guildFilter: [" guild-b ", "guild-c"],
     detailConditions: {
       operator: "OR",
       children: [
@@ -436,7 +456,9 @@ function createRequest(overrides: Partial<NotificationRequest> = {}): Notificati
     battleType: "guildBattle",
     ruleId: "rule-a",
     ruleName: "Rule A",
+    detailRuleEnabled: true,
     duplicateKey: "duplicate-a",
+    activeTimeWindow: "20:50-open",
     baseId: "castle-1",
     baseName: "ブラッセル",
     castleName: "ブラッセル",

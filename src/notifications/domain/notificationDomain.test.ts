@@ -6,10 +6,12 @@ import {
   createFallbackBaseName,
   deriveBattleSideFromCastleStatus,
   evaluateNotificationRule,
+  evaluateRuleLevelNotification,
   parseStartTimeMinutes,
   resolveDisplayGuildSides,
   type NotificationObservation,
   type NotificationRule,
+  type NotificationRuleTick,
 } from "./notificationDomain.js";
 
 test("skips disabled and battle type mismatch rules", () => {
@@ -119,83 +121,94 @@ test("evaluates detail condition root OR and groups", () => {
   );
 });
 
-test("matches time-only rules when detail conditions are empty", () => {
-  assert.equal(
-    evaluateNotificationRule(
-      createRule({
-        detailConditions: {
-          operator: "OR",
-          children: [],
-        },
-      }),
-      createObservation(),
-    ).status,
-    "matched",
+test("creates rule-level notification for detail-rule-off rules in active time", () => {
+  const result = evaluateRuleLevelNotification(
+    createRule({
+      detailRuleEnabled: false,
+      message: {
+        usernameTemplate: "{通知ルール名}",
+        mention: { type: "none" },
+        titleTemplate: "定時 {通知時刻}",
+        bodyTemplate: "body",
+      },
+    }),
+    createRuleTick(),
   );
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.request.detailRuleEnabled, false);
+  assert.equal(result.request.activeTimeWindow, "20:50-open");
+  assert.equal(result.request.message.username, "Rule A");
+  assert.equal(result.request.message.title, "定時 20:55");
+  assert.equal(result.request.baseId, undefined);
+  assert.equal(result.request.attackGuildId, undefined);
   assert.equal(
-    evaluateNotificationRule(
-      createRule({
-        detailConditions: {
-          operator: "OR",
-          children: [
-            {
-              type: "group",
-              operator: "AND",
-              children: [],
-            },
-          ],
-        },
-      }),
-      createObservation(),
-    ).status,
-    "matched",
+    result.request.duplicateKey,
+    "111111111001:guildBattle:1001:2026-06-17:rule-a:time:20:50-open",
   );
+});
+
+test("skips rule-level notification outside active time and with detail-only variables", () => {
   assert.deepEqual(
-    evaluateNotificationRule(
+    evaluateRuleLevelNotification(
       createRule({
-        detailConditions: {
-          operator: "OR",
-          children: [],
-        },
-        schedule: {
-          startTime: "20:56",
-          endTime: null,
-        },
+        detailRuleEnabled: false,
       }),
-      createObservation(),
+      createRuleTick({ observedAt: new Date("2026-06-17T11:49:00.000Z") }),
     ),
     {
       status: "skipped",
       reason: "before_start_time",
     },
   );
+  assert.deepEqual(
+    evaluateRuleLevelNotification(
+      createRule({
+        detailRuleEnabled: false,
+        message: {
+          usernameTemplate: "",
+          mention: { type: "none" },
+          titleTemplate: "{拠点名}",
+          bodyTemplate: "",
+        },
+      }),
+      createRuleTick(),
+    ),
+    {
+      status: "skipped",
+      reason: "detail_rule_off_template_variables",
+    },
+  );
 });
 
-test("filters target guild ids only for Guild Battle", () => {
-  const rule = createRule({
-    targetGuildIds: ["target-guild"],
-  });
-
+test("filters guildFilter by semantic attack or defense guild ids", () => {
   assert.equal(
     evaluateNotificationRule(
-      rule,
-      createObservation({ attackerGuildId: "target-guild" }),
+      createRule({ battleSide: "attack", guildFilter: ["111111111001"] }),
+      createObservation({ attackGuildId: "111111111001", defenseGuildId: "other-guild" }),
+    ).status,
+    "matched",
+  );
+  assert.equal(
+    evaluateNotificationRule(
+      createRule({ battleSide: "defense", guildFilter: ["111111111001"] }),
+      createObservation({ attackGuildId: "other-guild", defenseGuildId: "111111111001" }),
     ).status,
     "matched",
   );
   assert.deepEqual(
-    evaluateNotificationRule(rule, createObservation({ attackerGuildId: "other-guild" })),
+    evaluateNotificationRule(
+      createRule({ guildFilter: ["target-guild"] }),
+      createObservation(),
+    ),
     {
       status: "skipped",
       reason: "target_guild_not_matched",
     },
   );
-  assert.deepEqual(evaluateNotificationRule(rule, createObservation({ attackerGuildId: null })), {
-    status: "skipped",
-    reason: "target_guild_not_matched",
-  });
   assert.equal(
-    evaluateNotificationRule(createRule({ targetGuildIds: [] }), createObservation()).status,
+    evaluateNotificationRule(createRule({ guildFilter: [] }), createObservation()).status,
     "matched",
   );
 });
@@ -289,6 +302,7 @@ test("renders attack and defense guild templates from gvg castle state", () => {
   for (const testCase of cases) {
     const result = evaluateNotificationRule(
       createRule({
+        battleSide: testCase.expectedAttackGuildId === "111111111001" ? "attack" : "defense",
         message: {
           usernameTemplate: "",
           mention: { type: "none" },
@@ -307,6 +321,26 @@ test("renders attack and defense guild templates from gvg castle state", () => {
         }),
       }),
     );
+
+    if (testCase.expectedAttackGuildId === null && testCase.expectedDefenseGuildId === null) {
+      assert.deepEqual(
+        resolveDisplayGuildSides({
+          gvgCastleState: testCase.gvgCastleState,
+          ownerGuildId: "111111111001",
+          ownerGuildName: "Owner A",
+          attackerGuildId: "222222222001",
+          attackerGuildName: "Attacker A",
+        }),
+        {
+          attackGuildId: null,
+          attackGuildName: null,
+          defenseGuildId: null,
+          defenseGuildName: null,
+        },
+        testCase.name,
+      );
+      continue;
+    }
 
     assert.equal(result.status, "matched");
     if (result.status !== "matched") return;
@@ -461,7 +495,7 @@ test("creates stable request id and duplicate key components", () => {
 
 test("keeps raw attacker fields and duplicate key when display attack side is reversed", () => {
   const result = evaluateNotificationRule(
-    createRule(),
+    createRule({ battleSide: "attack" }),
     createObservation({
       gvgCastleState: GVG_CASTLE_STATE.activeBattle,
       ...resolveDisplayGuildSides({
@@ -488,7 +522,7 @@ test("keeps raw attacker fields and duplicate key when display attack side is re
   );
 });
 
-test("filters rules by battleSide derived from castle status", () => {
+test("filters rules by battleSide derived from semantic guild sides", () => {
   assert.equal(
     evaluateNotificationRule(createRule({ battleSide: "defense" }), createObservation()).status,
     "matched",
@@ -497,8 +531,8 @@ test("filters rules by battleSide derived from castle status", () => {
     evaluateNotificationRule(
       createRule({ battleSide: "attack" }),
       createObservation({
-        ownerGuildId: "111111111001",
-        attackerGuildId: "111111111001",
+        attackGuildId: "222222222001",
+        defenseGuildId: "111111111001",
       }),
     ),
     {
@@ -508,11 +542,11 @@ test("filters rules by battleSide derived from castle status", () => {
   );
   assert.equal(
     evaluateNotificationRule(
-      createRule({ battleSide: "attack", targetGuildIds: ["111111111001"] }),
+      createRule({ battleSide: "attack", guildFilter: ["111111111001"] }),
       createObservation({
-        ownerGuildId: "222222222001",
-        attackerGuildId: "111111111001",
-        attackerGuildName: "Own Guild",
+        attackGuildId: "111111111001",
+        attackGuildName: "Own Guild",
+        defenseGuildId: "222222222001",
       }),
     ).status,
     "matched",
@@ -521,8 +555,8 @@ test("filters rules by battleSide derived from castle status", () => {
     evaluateNotificationRule(
       createRule({ battleSide: "defense" }),
       createObservation({
-        ownerGuildId: "333333333001",
-        attackerGuildId: "222222222001",
+        attackGuildId: "222222222001",
+        defenseGuildId: "333333333001",
       }),
     ),
     {
@@ -575,7 +609,7 @@ test("matches Grand Battle rules and keeps battle type in request payload", () =
   const result = evaluateNotificationRule(
     createRule({
       battleType: "grandBattle",
-      targetGuildIds: ["unrelated-guild"],
+      guildFilter: [],
       detailConditions: {
         operator: "OR",
         children: [
@@ -647,6 +681,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
     id: "rule-a",
     schemaVersion: 2,
     battleType: "guildBattle",
+    detailRuleEnabled: true,
     battleSide: "defense",
     name: "Rule A",
     enabled: true,
@@ -655,7 +690,7 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
       startTime: "20:50",
       endTime: null,
     },
-    targetGuildIds: [],
+    guildFilter: [],
     detailConditions: {
       operator: "OR",
       children: [
@@ -673,6 +708,17 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
       titleTemplate: "{拠点名}",
       bodyTemplate: "{通知ルール名}",
     },
+    ...overrides,
+  };
+}
+
+function createRuleTick(overrides: Partial<NotificationRuleTick> = {}): NotificationRuleTick {
+  return {
+    guildId: "111111111001",
+    battleType: "guildBattle",
+    observedAt: new Date("2026-06-17T11:55:00.000Z"),
+    worldId: "1001",
+    runId: "run-a",
     ...overrides,
   };
 }

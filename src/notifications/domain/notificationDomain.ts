@@ -38,6 +38,7 @@ export type NotificationRule = {
   id: string;
   schemaVersion: 2;
   battleType: NotificationBattleType;
+  detailRuleEnabled: boolean;
   battleSide: NotificationBattleSide;
   name: string;
   enabled: boolean;
@@ -46,7 +47,7 @@ export type NotificationRule = {
     startTime: string;
     endTime: string | null;
   };
-  targetGuildIds: string[];
+  guildFilter: string[];
   detailConditions: NotificationDetailConditionRoot;
   message: {
     usernameTemplate: string;
@@ -81,26 +82,37 @@ export type NotificationObservation = {
   runId: string;
 };
 
+export type NotificationRuleTick = {
+  guildId: string;
+  battleType: NotificationBattleType;
+  observedAt: Date;
+  worldId: string;
+  blockId?: number;
+  runId: string;
+};
+
 export type NotificationRequest = {
   guildId: string;
   battleType: NotificationBattleType;
   ruleId: string;
   ruleName: string;
+  detailRuleEnabled: boolean;
   duplicateKey: string;
-  baseId: string;
-  baseName: string;
-  castleName: string;
-  gvgCastleState: number;
-  ownerGuildId: string | null;
-  ownerGuildName: string;
+  activeTimeWindow: string;
+  baseId?: string;
+  baseName?: string;
+  castleName?: string;
+  gvgCastleState?: number;
+  ownerGuildId?: string | null;
+  ownerGuildName?: string;
   attackerGuildId?: string;
-  attackerGuildName: string;
-  attackGuildId: string | null;
-  attackGuildName: string;
-  defenseGuildId: string | null;
-  defenseGuildName: string;
-  defenseCount: number;
-  attackCount: number;
+  attackerGuildName?: string;
+  attackGuildId?: string | null;
+  attackGuildName?: string;
+  defenseGuildId?: string | null;
+  defenseGuildName?: string;
+  defenseCount?: number;
+  attackCount?: number;
   message: {
     username: string;
     mentionText: string;
@@ -138,6 +150,13 @@ const TEMPLATE_VARIABLES = {
   notificationTime: "{通知時刻}",
   ruleName: "{通知ルール名}",
 } as const;
+const DETAIL_RULE_OFF_UNAVAILABLE_VARIABLES = [
+  TEMPLATE_VARIABLES.baseName,
+  TEMPLATE_VARIABLES.attackerGuild,
+  TEMPLATE_VARIABLES.defenseGuild,
+  TEMPLATE_VARIABLES.defenseCount,
+  TEMPLATE_VARIABLES.attackCount,
+] as const;
 const MESSAGE_TITLE_MAX_LENGTH = 120;
 const TRUNCATED_TITLE_SUFFIX = "…";
 
@@ -145,6 +164,10 @@ export function evaluateNotificationRule(
   rule: NotificationRule,
   observation: NotificationObservation,
 ): NotificationEvaluationResult {
+  if (!rule.detailRuleEnabled) {
+    return { status: "skipped", reason: "detail_rule_disabled" };
+  }
+
   if (!rule.enabled) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -153,11 +176,10 @@ export function evaluateNotificationRule(
     return { status: "skipped", reason: "battle_type_mismatch" };
   }
 
-  const derivedBattleSide = deriveBattleSideFromCastleStatus({
+  const derivedBattleSide = deriveBattleSideFromObservation({
     ownGuildId: observation.guildId,
-    ownerGuildId: observation.ownerGuildId,
-    attackerGuildId: observation.attackerGuildId,
-    attackCount: observation.attackCount,
+    attackGuildId: observation.attackGuildId,
+    defenseGuildId: observation.defenseGuildId,
   });
   if (derivedBattleSide !== rule.battleSide) {
     return { status: "skipped", reason: `battle_side_${derivedBattleSide}` };
@@ -171,24 +193,9 @@ export function evaluateNotificationRule(
     return { status: "skipped", reason: "target_guild_not_matched" };
   }
 
-  const startTimeMinutes = parseStartTimeMinutes(rule.schedule.startTime);
-  if (startTimeMinutes === null) {
-    return { status: "skipped", reason: "invalid_start_time" };
-  }
-
-  const endTimeMinutes =
-    rule.schedule.endTime === null ? null : parseStartTimeMinutes(rule.schedule.endTime);
-  if (rule.schedule.endTime !== null && endTimeMinutes === null) {
-    return { status: "skipped", reason: "invalid_end_time" };
-  }
-
-  const observedMinutes = getJstTimeMinutes(observation.observedAt);
-  if (observedMinutes < startTimeMinutes) {
-    return { status: "skipped", reason: "before_start_time" };
-  }
-
-  if (endTimeMinutes !== null && observedMinutes > endTimeMinutes) {
-    return { status: "skipped", reason: "after_end_time" };
+  const activeTimeResult = evaluateActiveTime(rule, observation.observedAt);
+  if (activeTimeResult.status === "skipped") {
+    return activeTimeResult;
   }
 
   if (!evaluateDetailConditionRoot(rule.detailConditions, observation)) {
@@ -203,6 +210,43 @@ export function evaluateNotificationRule(
   };
 }
 
+export function evaluateRuleLevelNotification(
+  rule: NotificationRule,
+  tick: NotificationRuleTick,
+): NotificationEvaluationResult {
+  if (rule.detailRuleEnabled) {
+    return { status: "skipped", reason: "detail_rule_enabled" };
+  }
+
+  if (!rule.enabled) {
+    return { status: "skipped", reason: "disabled" };
+  }
+
+  if (rule.battleType !== tick.battleType) {
+    return { status: "skipped", reason: "battle_type_mismatch" };
+  }
+
+  if (isTemporarilySuspended(rule, tick)) {
+    return { status: "skipped", reason: "temporary_suspended" };
+  }
+
+  const activeTimeResult = evaluateActiveTime(rule, tick.observedAt);
+  if (activeTimeResult.status === "skipped") {
+    return activeTimeResult;
+  }
+
+  if (hasDetailRuleOnlyTemplateVariable(rule)) {
+    return { status: "skipped", reason: "detail_rule_off_template_variables" };
+  }
+
+  const request = createRuleLevelNotificationRequest(rule, tick, activeTimeResult.activeTimeWindow);
+  return {
+    status: "matched",
+    requestId: createNotificationRequestId(request.duplicateKey),
+    request,
+  };
+}
+
 export function createNotificationRequest(
   rule: NotificationRule,
   observation: NotificationObservation,
@@ -210,6 +254,7 @@ export function createNotificationRequest(
   const baseId = `castle-${observation.castleId}`;
   const battleDate = getJstDateString(observation.observedAt);
   const notificationTime = getJstTimeString(observation.observedAt);
+  const activeTimeWindow = createActiveTimeWindow(rule);
   const attackerGuildName = resolveAttackerGuildName(observation);
   const ownerGuildName = resolveGuildName(observation.ownerGuildId, observation.ownerGuildName);
   const attackGuildName = resolveGuildName(observation.attackGuildId, observation.attackGuildName);
@@ -232,7 +277,9 @@ export function createNotificationRequest(
     battleType: observation.battleType,
     ruleId: rule.id,
     ruleName: rule.name,
+    detailRuleEnabled: true,
     duplicateKey,
+    activeTimeWindow,
     baseId,
     baseName: observation.castleName,
     castleName: observation.castleName,
@@ -343,6 +390,22 @@ export function deriveBattleSideFromCastleStatus(input: {
   return "unrelated";
 }
 
+export function deriveBattleSideFromObservation(input: {
+  ownGuildId: string;
+  attackGuildId: string | null;
+  defenseGuildId: string | null;
+}): DerivedBattleSide {
+  if (input.defenseGuildId === input.ownGuildId) {
+    return "defense";
+  }
+
+  if (input.attackGuildId === input.ownGuildId) {
+    return "attack";
+  }
+
+  return "unrelated";
+}
+
 export function compareNotificationRulePriority(
   firstRule: NotificationRule,
   secondRule: NotificationRule,
@@ -387,6 +450,25 @@ function createDuplicateKey(input: {
   ].join(":");
 }
 
+function createRuleLevelDuplicateKey(input: {
+  guildId: string;
+  battleType: NotificationBattleType;
+  worldId: string;
+  battleDate: string;
+  ruleId: string;
+  activeTimeWindow: string;
+}): string {
+  return [
+    input.guildId,
+    input.battleType,
+    input.worldId,
+    input.battleDate,
+    input.ruleId,
+    "time",
+    input.activeTimeWindow,
+  ].join(":");
+}
+
 function renderMention(mention: NotificationMention): string {
   if (mention.type === "here") {
     return "@here";
@@ -420,6 +502,16 @@ function renderTemplate(
     .replaceAll(TEMPLATE_VARIABLES.ruleName, rule.name);
 }
 
+function renderRuleLevelTemplate(
+  template: string,
+  rule: NotificationRule,
+  notificationTime: string,
+): string {
+  return template
+    .replaceAll(TEMPLATE_VARIABLES.notificationTime, notificationTime)
+    .replaceAll(TEMPLATE_VARIABLES.ruleName, rule.name);
+}
+
 function normalizeMessageTitle(title: string): string {
   const titleCharacters = Array.from(title);
   if (titleCharacters.length <= MESSAGE_TITLE_MAX_LENGTH) {
@@ -432,7 +524,7 @@ function normalizeMessageTitle(title: string): string {
 
 function isTemporarilySuspended(
   rule: NotificationRule,
-  observation: NotificationObservation,
+  observation: Pick<NotificationObservation, "observedAt"> | Pick<NotificationRuleTick, "observedAt">,
 ): boolean {
   if (rule.temporarySuspension === undefined) {
     return false;
@@ -449,13 +541,13 @@ function isTargetGuildMatched(
   rule: NotificationRule,
   observation: NotificationObservation,
 ): boolean {
-  if (rule.battleType !== "guildBattle" || rule.targetGuildIds.length === 0) {
+  if (rule.guildFilter.length === 0) {
     return true;
   }
 
   return (
-    observation.attackerGuildId !== null &&
-    rule.targetGuildIds.includes(observation.attackerGuildId)
+    (observation.attackGuildId !== null && rule.guildFilter.includes(observation.attackGuildId)) ||
+    (observation.defenseGuildId !== null && rule.guildFilter.includes(observation.defenseGuildId))
   );
 }
 
@@ -509,6 +601,50 @@ function hasDetailCondition(root: NotificationDetailConditionRoot): boolean {
   });
 }
 
+function evaluateActiveTime(
+  rule: NotificationRule,
+  observedAt: Date,
+): { status: "matched"; activeTimeWindow: string } | { status: "skipped"; reason: string } {
+  const startTimeMinutes = parseStartTimeMinutes(rule.schedule.startTime);
+  if (startTimeMinutes === null) {
+    return { status: "skipped", reason: "invalid_start_time" };
+  }
+
+  const endTimeMinutes =
+    rule.schedule.endTime === null ? null : parseStartTimeMinutes(rule.schedule.endTime);
+  if (rule.schedule.endTime !== null && endTimeMinutes === null) {
+    return { status: "skipped", reason: "invalid_end_time" };
+  }
+
+  const observedMinutes = getJstTimeMinutes(observedAt);
+  if (observedMinutes < startTimeMinutes) {
+    return { status: "skipped", reason: "before_start_time" };
+  }
+
+  if (endTimeMinutes !== null && observedMinutes > endTimeMinutes) {
+    return { status: "skipped", reason: "after_end_time" };
+  }
+
+  return {
+    status: "matched",
+    activeTimeWindow: createActiveTimeWindow(rule),
+  };
+}
+
+function createActiveTimeWindow(rule: NotificationRule): string {
+  return `${rule.schedule.startTime}-${rule.schedule.endTime ?? "open"}`;
+}
+
+function hasDetailRuleOnlyTemplateVariable(rule: NotificationRule): boolean {
+  return [
+    rule.message.usernameTemplate,
+    rule.message.titleTemplate,
+    rule.message.bodyTemplate,
+  ].some((template) =>
+    DETAIL_RULE_OFF_UNAVAILABLE_VARIABLES.some((variable) => template.includes(variable)),
+  );
+}
+
 function resolveAttackerKey(observation: NotificationObservation): string {
   return observation.attackerGuildId ?? "no-attacker";
 }
@@ -545,6 +681,50 @@ function createDisplayGuildSides(
     attackGuildName: attackSide?.guildName ?? null,
     defenseGuildId: defenseSide?.guildId ?? null,
     defenseGuildName: defenseSide?.guildName ?? null,
+  };
+}
+
+export function createRuleLevelNotificationRequest(
+  rule: NotificationRule,
+  tick: NotificationRuleTick,
+  activeTimeWindow: string = createActiveTimeWindow(rule),
+): NotificationRequest {
+  const battleDate = getJstDateString(tick.observedAt);
+  const notificationTime = getJstTimeString(tick.observedAt);
+  const duplicateKey = createRuleLevelDuplicateKey({
+    guildId: tick.guildId,
+    battleType: tick.battleType,
+    ruleId: rule.id,
+    battleDate,
+    worldId: tick.worldId,
+    activeTimeWindow,
+  });
+
+  return {
+    guildId: tick.guildId,
+    battleType: tick.battleType,
+    ruleId: rule.id,
+    ruleName: rule.name,
+    detailRuleEnabled: false,
+    duplicateKey,
+    activeTimeWindow,
+    message: {
+      username: renderRuleLevelTemplate(rule.message.usernameTemplate, rule, notificationTime),
+      mentionText: renderMention(rule.message.mention),
+      title: normalizeMessageTitle(
+        renderRuleLevelTemplate(rule.message.titleTemplate, rule, notificationTime),
+      ),
+      body: renderRuleLevelTemplate(rule.message.bodyTemplate, rule, notificationTime),
+    },
+    source: {
+      observedAt: tick.observedAt,
+      battleDate,
+      worldId: tick.worldId,
+      ...(tick.blockId === undefined ? {} : { blockId: tick.blockId }),
+      runId: tick.runId,
+    },
+    status: "pending",
+    createdAt: tick.observedAt,
   };
 }
 
