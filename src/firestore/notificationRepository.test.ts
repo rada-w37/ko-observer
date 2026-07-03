@@ -98,7 +98,7 @@ test("uses document id as canonical and defaults missing optional v2 fields", as
   assert.equal(result.skippedInvalidSchemaCount, 0);
 });
 
-test("normalizes repeatNotification without skipping invalid repeat settings", async () => {
+test("normalizes invalid repeatNotification as disabled without skipping rules", async () => {
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "repeat-enabled", {
     ...createRuleData(),
@@ -112,19 +112,59 @@ test("normalizes repeatNotification without skipping invalid repeat settings", a
     ...createRuleData(),
     repeatNotification: { enabled: true, intervalSeconds: "60" },
   });
+  firestore.seedRule("guild-a", "repeat-fraction", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 60.5 },
+  });
+  firestore.seedRule("guild-a", "repeat-null-interval", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: null },
+  });
+  firestore.seedRule("guild-a", "repeat-null", {
+    ...createRuleData(),
+    repeatNotification: null,
+  });
+  firestore.seedRule("guild-a", "repeat-disabled", {
+    ...createRuleData(),
+    repeatNotification: { enabled: false, intervalSeconds: 60 },
+  });
+  firestore.seedRule("guild-a", "repeat-non-object", {
+    ...createRuleData(),
+    repeatNotification: true,
+  });
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
-  assert.equal(result.rules.length, 3);
+  assert.equal(result.rules.length, 8);
   assert.deepEqual(result.rules[0]?.repeatNotification, {
     enabled: true,
     intervalSeconds: 60,
   });
   assert.deepEqual(result.rules[1]?.repeatNotification, {
-    enabled: true,
-    intervalSeconds: 30,
+    enabled: false,
+    intervalSeconds: 300,
   });
   assert.deepEqual(result.rules[2]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[3]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[4]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[5]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[6]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[7]?.repeatNotification, {
     enabled: false,
     intervalSeconds: 300,
   });
@@ -206,6 +246,7 @@ test("skips detail-rule-on rules without detail condition children", async () =>
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "empty-root", {
     ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 60 },
     detailConditions: {
       operator: "OR",
       children: [],
@@ -213,6 +254,7 @@ test("skips detail-rule-on rules without detail condition children", async () =>
   });
   firestore.seedRule("guild-a", "empty-group", {
     ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 60 },
     detailConditions: {
       operator: "OR",
       children: [
