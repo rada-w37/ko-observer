@@ -4,10 +4,13 @@ import { GVG_CASTLE_STATE } from "../../mentemori/types.js";
 import {
   compareNotificationRulePriority,
   createFallbackBaseName,
+  createNotificationRequestId,
+  createRepeatNotificationRequestId,
   deriveBattleSideFromCastleStatus,
   evaluateNotificationRule,
   evaluateRuleLevelNotification,
   parseStartTimeMinutes,
+  resolveEffectiveRepeatNotification,
   resolveDisplayGuildSides,
   type NotificationObservation,
   type NotificationRule,
@@ -493,6 +496,54 @@ test("creates stable request id and duplicate key components", () => {
   assert.equal(unknown.request.attackerGuildName, "不明");
 });
 
+test("keeps non-repeat request id unchanged and creates repeat request id from base key and sequence", () => {
+  const result = evaluateNotificationRule(createRule(), createObservation());
+
+  assert.equal(result.status, "matched");
+  if (result.status !== "matched") return;
+  assert.equal(result.requestId, createNotificationRequestId(result.request.duplicateKey));
+  assert.equal(
+    createRepeatNotificationRequestId(result.request.duplicateKey, 1),
+    createNotificationRequestId(`${result.request.duplicateKey}|repeat|1`),
+  );
+});
+
+test("resolves effective repeat notification only for detail rules with conditions and valid interval", () => {
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: 60 } }),
+    ),
+    { enabled: true, intervalSeconds: 60 },
+  );
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({ detailRuleEnabled: false, repeatNotification: { enabled: true, intervalSeconds: 60 } }),
+    ),
+    { enabled: false },
+  );
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({
+        detailConditions: { operator: "OR", children: [] },
+        repeatNotification: { enabled: true, intervalSeconds: 60 },
+      }),
+    ),
+    { enabled: false },
+  );
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: 59 } }),
+    ),
+    { enabled: false },
+  );
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: Number.NaN } }),
+    ),
+    { enabled: false },
+  );
+});
+
 test("keeps raw attacker fields and duplicate key when display attack side is reversed", () => {
   const result = evaluateNotificationRule(
     createRule({ battleSide: "attack" }),
@@ -707,6 +758,10 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
       mention: { type: "none" },
       titleTemplate: "{拠点名}",
       bodyTemplate: "{通知ルール名}",
+    },
+    repeatNotification: {
+      enabled: false,
+      intervalSeconds: 300,
     },
     ...overrides,
   };

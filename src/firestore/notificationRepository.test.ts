@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Firestore } from "firebase-admin/firestore";
+import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import {
   createNotificationRequest,
+  createRepeatNotificationRequest,
   loadNotificationRules,
 } from "./notificationRepository.js";
 import type { NotificationRequest } from "../notifications/domain/notificationDomain.js";
@@ -58,6 +59,10 @@ test("loads Guild Battle and Grand Battle v2 rules and classifies skipped docume
       titleTemplate: "{諡轤ｹ蜷閤",
       bodyTemplate: "{髦ｲ蠕｡謨ｰ}",
     },
+    repeatNotification: {
+      enabled: false,
+      intervalSeconds: 300,
+    },
     temporarySuspension: {
       expiresAt: "2026-06-17T12:30:00.000Z",
     },
@@ -86,6 +91,43 @@ test("uses document id as canonical and defaults missing optional v2 fields", as
   assert.equal(result.rules[0]?.detailRuleEnabled, true);
   assert.equal(result.rules[0]?.battleSide, "defense");
   assert.deepEqual(result.rules[0]?.guildFilter, []);
+  assert.deepEqual(result.rules[0]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.equal(result.skippedInvalidSchemaCount, 0);
+});
+
+test("normalizes repeatNotification without skipping invalid repeat settings", async () => {
+  const firestore = new FakeFirestore();
+  firestore.seedRule("guild-a", "repeat-enabled", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 60 },
+  });
+  firestore.seedRule("guild-a", "repeat-short-interval", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 30 },
+  });
+  firestore.seedRule("guild-a", "repeat-invalid", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: "60" },
+  });
+
+  const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
+
+  assert.equal(result.rules.length, 3);
+  assert.deepEqual(result.rules[0]?.repeatNotification, {
+    enabled: true,
+    intervalSeconds: 60,
+  });
+  assert.deepEqual(result.rules[1]?.repeatNotification, {
+    enabled: true,
+    intervalSeconds: 30,
+  });
+  assert.deepEqual(result.rules[2]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
   assert.equal(result.skippedInvalidSchemaCount, 0);
 });
 
@@ -413,6 +455,93 @@ test("treats already existing notification request as duplicate", async () => {
   assert.deepEqual(firestore.createdRequestIds, ["request-a"]);
 });
 
+test("creates first repeat notification request and repeat state in a transaction", async () => {
+  const firestore = new FakeFirestore();
+  const request = createRequest();
+  const result = await createRepeatNotificationRequest(
+    firestore as unknown as Firestore,
+    request,
+    60,
+  );
+
+  assert.deepEqual(result, { status: "created" });
+  assert.equal(firestore.createdRequestIds.length, 1);
+  assert.notEqual(firestore.createdRequestIds[0], "duplicate-a");
+  const storedRequest = firestore.requestData.get(firestore.createdRequestIds[0] ?? "");
+  assert.deepEqual(storedRequest?.repeatNotification, {
+    enabled: true,
+    intervalSeconds: 60,
+  });
+  assert.equal(storedRequest?.isRepeat, true);
+  assert.equal(storedRequest?.repeatSeq, 1);
+  assert.equal(storedRequest?.duplicateKey, "duplicate-a");
+
+  const state = firestore.repeatStateData.get(storedRequest?.baseNotificationKey as string);
+  assert.equal(state?.rawBaseNotificationKey, "duplicate-a");
+  assert.equal(state?.repeatSeq, 1);
+  assert.equal(state?.intervalSeconds, 60);
+  assert.equal(state?.castleId, "1");
+  assert.equal(state?.attackerGuildId, "guild-b");
+  assert.equal(typeof state?.expiresAt, "object");
+});
+
+test("skips repeat notification before interval and keeps lastNotifiedAt", async () => {
+  const firestore = new FakeFirestore();
+  await createRepeatNotificationRequest(firestore as unknown as Firestore, createRequest(), 60);
+  const stateBefore = new Map(firestore.repeatStateData);
+
+  const result = await createRepeatNotificationRequest(
+    firestore as unknown as Firestore,
+    createRequest({ createdAt: new Date("2026-06-17T11:55:59.000Z") }),
+    60,
+  );
+
+  assert.deepEqual(result, { status: "skipped" });
+  assert.equal(firestore.createdRequestIds.length, 1);
+  assert.deepEqual(firestore.repeatStateData, stateBefore);
+});
+
+test("creates next repeat notification after interval using current interval seconds", async () => {
+  const firestore = new FakeFirestore();
+  await createRepeatNotificationRequest(firestore as unknown as Firestore, createRequest(), 300);
+
+  const result = await createRepeatNotificationRequest(
+    firestore as unknown as Firestore,
+    createRequest({ createdAt: new Date("2026-06-17T11:56:01.000Z") }),
+    60,
+  );
+
+  assert.deepEqual(result, { status: "created" });
+  assert.equal(firestore.createdRequestIds.length, 2);
+  const storedRequest = firestore.requestData.get(firestore.createdRequestIds[1] ?? "");
+  const firstStoredRequest = firestore.requestData.get(firestore.createdRequestIds[0] ?? "");
+  assert.equal(storedRequest?.repeatSeq, 2);
+  assert.equal(storedRequest?.baseNotificationKey, firstStoredRequest?.baseNotificationKey);
+  const state = firestore.repeatStateData.get(storedRequest?.baseNotificationKey as string);
+  assert.equal(state?.repeatSeq, 2);
+  assert.equal(state?.intervalSeconds, 60);
+});
+
+test("treats duplicate repeat request document as duplicate", async () => {
+  const firestore = new FakeFirestore();
+  await createRepeatNotificationRequest(firestore as unknown as Firestore, createRequest(), 60);
+  const state = firestore.repeatStateData.values().next().value;
+  if (!state) {
+    throw new Error("repeat state was not created");
+  }
+  state.lastNotifiedAt = Timestamp.fromDate(new Date("2026-06-17T11:55:00.000Z"));
+  state.repeatSeq = 0;
+
+  const result = await createRepeatNotificationRequest(
+    firestore as unknown as Firestore,
+    createRequest({ createdAt: new Date("2026-06-17T11:56:00.000Z") }),
+    60,
+  );
+
+  assert.deepEqual(result, { status: "duplicate" });
+  assert.equal(firestore.createdRequestIds.length, 1);
+});
+
 function createRuleData(): Record<string, unknown> {
   return {
     schemaVersion: 2,
@@ -494,6 +623,7 @@ function createRequest(overrides: Partial<NotificationRequest> = {}): Notificati
 class FakeFirestore {
   readonly collectionIds: string[] = [];
   readonly requestData = new Map<string, Record<string, unknown>>();
+  readonly repeatStateData = new Map<string, Record<string, unknown>>();
   readonly createdRequestIds: string[] = [];
   private readonly ruleData = new Map<string, Map<string, Record<string, unknown>>>();
 
@@ -521,6 +651,47 @@ class FakeFirestore {
     this.createdRequestIds.push(requestId);
     this.requestData.set(requestId, data);
   }
+
+  async runTransaction<T>(updateFunction: (transaction: FakeTransaction) => Promise<T>): Promise<T> {
+    return updateFunction(new FakeTransaction(this));
+  }
+}
+
+class FakeTransaction {
+  constructor(private readonly firestore: FakeFirestore) {}
+
+  async get(ref: FakeDocumentReference): Promise<FakeDocumentSnapshot> {
+    const [collectionId, documentId] = ref.path;
+    assert.equal(typeof documentId, "string");
+    if (collectionId !== "notificationRepeatStates") {
+      throw new Error(`unexpected transaction get path: ${ref.path.join("/")}`);
+    }
+
+    const data = this.firestore.repeatStateData.get(documentId);
+    return new FakeDocumentSnapshot(documentId, data, data !== undefined);
+  }
+
+  create(ref: FakeDocumentReference, data: Record<string, unknown>): void {
+    const [collectionId, documentId] = ref.path;
+    assert.equal(collectionId, "notificationRequests");
+    assert.equal(typeof documentId, "string");
+    this.firestore.createRequest(documentId, data);
+  }
+
+  set(
+    ref: FakeDocumentReference,
+    data: Record<string, unknown>,
+    options?: { merge: boolean },
+  ): void {
+    const [collectionId, documentId] = ref.path;
+    assert.equal(collectionId, "notificationRepeatStates");
+    assert.equal(typeof documentId, "string");
+    const previous = options?.merge ? this.firestore.repeatStateData.get(documentId) ?? {} : {};
+    this.firestore.repeatStateData.set(documentId, {
+      ...previous,
+      ...data,
+    });
+  }
 }
 
 class FakeCollectionReference {
@@ -537,7 +708,7 @@ class FakeCollectionReference {
 class FakeDocumentReference {
   constructor(
     private readonly firestore: FakeFirestore,
-    private readonly path: string[],
+    readonly path: string[],
   ) {}
 
   collection(collectionId: string): FakeRuleCollectionReference {
@@ -572,10 +743,11 @@ class FakeRuleCollectionReference {
 class FakeDocumentSnapshot {
   constructor(
     readonly id: string,
-    private readonly value: Record<string, unknown>,
+    private readonly value: Record<string, unknown> | undefined,
+    readonly exists = true,
   ) {}
 
-  data(): Record<string, unknown> {
+  data(): Record<string, unknown> | undefined {
     return this.value;
   }
 }

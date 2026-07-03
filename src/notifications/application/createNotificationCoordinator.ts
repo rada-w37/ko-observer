@@ -1,6 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import {
   createNotificationRequest,
+  createRepeatNotificationRequest,
   loadNotificationRules,
 } from "../../firestore/notificationRepository.js";
 import { logger } from "../../shared/logger.js";
@@ -42,6 +43,8 @@ export async function createNotificationCoordinator(input: {
       dryRun: input.config.notificationsDryRun,
       createRequest: (requestId, request) =>
         createNotificationRequest(input.firestore, requestId, request),
+      createRepeatRequest: (request, intervalSeconds) =>
+        createRepeatNotificationRequest(input.firestore, request, intervalSeconds),
     });
   } catch (error) {
     logger.warn(`notifications disabled because rule loading failed: ${formatErrorMessage(error)}`);

@@ -55,6 +55,10 @@ export type NotificationRule = {
     titleTemplate: string;
     bodyTemplate: string;
   };
+  repeatNotification: {
+    enabled: boolean;
+    intervalSeconds: number;
+  };
   temporarySuspension?: {
     expiresAt: string;
   };
@@ -113,6 +117,13 @@ export type NotificationRequest = {
   defenseGuildName?: string;
   defenseCount?: number;
   attackCount?: number;
+  repeatNotification?: {
+    enabled: true;
+    intervalSeconds: number;
+  };
+  baseNotificationKey?: string;
+  repeatSeq?: number;
+  isRepeat?: boolean;
   message: {
     username: string;
     mentionText: string;
@@ -159,6 +170,7 @@ const DETAIL_RULE_OFF_UNAVAILABLE_VARIABLES = [
 ] as const;
 const MESSAGE_TITLE_MAX_LENGTH = 120;
 const TRUNCATED_TITLE_SUFFIX = "…";
+const MIN_REPEAT_INTERVAL_SECONDS = 60;
 
 export function evaluateNotificationRule(
   rule: NotificationRule,
@@ -328,6 +340,37 @@ export function createNotificationRequest(
 
 export function createNotificationRequestId(duplicateKey: string): string {
   return createHash("sha256").update(duplicateKey).digest("hex");
+}
+
+export function createRepeatNotificationRequestId(
+  rawBaseNotificationKey: string,
+  repeatSeq: number,
+): string {
+  return createNotificationRequestId(`${rawBaseNotificationKey}|repeat|${repeatSeq}`);
+}
+
+export function resolveEffectiveRepeatNotification(
+  rule: NotificationRule,
+): { enabled: true; intervalSeconds: number } | { enabled: false } {
+  if (!rule.detailRuleEnabled) {
+    return { enabled: false };
+  }
+  if (rule.detailConditions.children.length === 0) {
+    return { enabled: false };
+  }
+  if (!rule.repeatNotification.enabled) {
+    return { enabled: false };
+  }
+  if (!Number.isSafeInteger(rule.repeatNotification.intervalSeconds)) {
+    return { enabled: false };
+  }
+  if (rule.repeatNotification.intervalSeconds < MIN_REPEAT_INTERVAL_SECONDS) {
+    return { enabled: false };
+  }
+  return {
+    enabled: true,
+    intervalSeconds: rule.repeatNotification.intervalSeconds,
+  };
 }
 
 export function createFallbackBaseName(_castleId: number): string {

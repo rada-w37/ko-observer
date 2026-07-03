@@ -1,5 +1,7 @@
 import { Timestamp, type Firestore } from "firebase-admin/firestore";
 import {
+  createNotificationRequestId,
+  createRepeatNotificationRequestId,
   parseStartTimeMinutes,
   type NotificationDetailCondition,
   type NotificationDetailConditionGroup,
@@ -13,7 +15,12 @@ import {
 const GUILD_SHARES_COLLECTION = "guildShares";
 const NOTIFICATION_RULES_COLLECTION = "notificationRules";
 const NOTIFICATION_REQUESTS_COLLECTION = "notificationRequests";
+const NOTIFICATION_REPEAT_STATES_COLLECTION = "notificationRepeatStates";
 const TITLE_TEMPLATE_MAX_LENGTH = 120;
+const DEFAULT_REPEAT_INTERVAL_SECONDS = 300;
+const REPEAT_STATE_TTL_DAYS = 7;
+const MILLISECONDS_PER_SECOND = 1000;
+const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export type LoadNotificationRulesResult = {
   rules: NotificationRule[];
@@ -44,6 +51,7 @@ type NotificationRuleData = {
   targetGuildIds?: unknown;
   detailConditions?: unknown;
   message?: unknown;
+  repeatNotification?: unknown;
   temporarySuspension?: unknown;
 };
 
@@ -111,6 +119,76 @@ export async function createNotificationRequest(
   }
 }
 
+export async function createRepeatNotificationRequest(
+  firestore: Firestore,
+  request: NotificationRequest,
+  intervalSeconds: number,
+): Promise<CreateNotificationRequestResult | { status: "skipped" }> {
+  const rawBaseNotificationKey = request.duplicateKey;
+  const baseNotificationKey = createNotificationRequestId(rawBaseNotificationKey);
+  const stateRef = firestore
+    .collection(NOTIFICATION_REPEAT_STATES_COLLECTION)
+    .doc(baseNotificationKey);
+
+  try {
+    return await firestore.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(stateRef);
+      const state = snapshot.exists ? readRepeatState(snapshot.data()) : null;
+      const now = request.createdAt;
+      if (
+        state !== null &&
+        state.lastNotifiedAt.getTime() + intervalSeconds * MILLISECONDS_PER_SECOND >
+          now.getTime()
+      ) {
+        return { status: "skipped" as const };
+      }
+
+      const repeatSeq = (state?.repeatSeq ?? 0) + 1;
+      const requestId = createRepeatNotificationRequestId(rawBaseNotificationKey, repeatSeq);
+      const requestRef = firestore.collection(NOTIFICATION_REQUESTS_COLLECTION).doc(requestId);
+      const repeatRequest: NotificationRequest = {
+        ...request,
+        repeatNotification: {
+          enabled: true,
+          intervalSeconds,
+        },
+        baseNotificationKey,
+        repeatSeq,
+        isRepeat: true,
+      };
+
+      transaction.create(requestRef, toFirestoreNotificationRequest(repeatRequest));
+      transaction.set(
+        stateRef,
+        {
+          baseNotificationKey,
+          rawBaseNotificationKey,
+          ruleId: request.ruleId,
+          guildId: request.guildId,
+          battleType: request.battleType,
+          worldId: request.source.worldId,
+          battleDate: request.source.battleDate,
+          ...(request.baseId === undefined ? {} : { castleId: normalizeCastleId(request.baseId) }),
+          attackerGuildId: request.attackerGuildId ?? null,
+          lastNotifiedAt: Timestamp.fromDate(now),
+          repeatSeq,
+          intervalSeconds,
+          updatedAt: Timestamp.fromDate(now),
+          expiresAt: Timestamp.fromDate(createRepeatStateExpiresAt(request.source.battleDate)),
+        },
+        { merge: true },
+      );
+
+      return { status: "created" as const };
+    });
+  } catch (error) {
+    if (isAlreadyExistsError(error)) {
+      return { status: "duplicate" };
+    }
+    throw error;
+  }
+}
+
 function normalizeNotificationRule(
   ruleId: string,
   rawData: unknown,
@@ -144,6 +222,7 @@ function normalizeNotificationRule(
     ? normalizeDetailConditions(data.detailConditions)
     : createEmptyDetailConditionRoot();
   const message = normalizeMessage(data.message);
+  const repeatNotification = normalizeRepeatNotification(data.repeatNotification);
   const temporarySuspension = normalizeTemporarySuspension(data.temporarySuspension);
 
   if (
@@ -173,6 +252,7 @@ function normalizeNotificationRule(
       guildFilter,
       detailConditions,
       message,
+      repeatNotification,
       ...(temporarySuspension === undefined ? {} : { temporarySuspension }),
     },
   };
@@ -378,6 +458,27 @@ function normalizeMessage(value: unknown): NotificationRule["message"] | null {
   };
 }
 
+function normalizeRepeatNotification(value: unknown): NotificationRule["repeatNotification"] {
+  if (value === undefined || value === null || !isRecord(value)) {
+    return {
+      enabled: false,
+      intervalSeconds: DEFAULT_REPEAT_INTERVAL_SECONDS,
+    };
+  }
+
+  if (value.enabled !== true || !isSafeInteger(value.intervalSeconds)) {
+    return {
+      enabled: false,
+      intervalSeconds: DEFAULT_REPEAT_INTERVAL_SECONDS,
+    };
+  }
+
+  return {
+    enabled: true,
+    intervalSeconds: value.intervalSeconds,
+  };
+}
+
 function normalizeMention(value: unknown): NotificationMention | null {
   if (!isRecord(value)) {
     return null;
@@ -464,6 +565,14 @@ function toFirestoreNotificationRequest(request: NotificationRequest): Record<st
     ...(request.defenseGuildName === undefined ? {} : { defenseGuildName: request.defenseGuildName }),
     ...(request.defenseCount === undefined ? {} : { defenseCount: request.defenseCount }),
     ...(request.attackCount === undefined ? {} : { attackCount: request.attackCount }),
+    ...(request.repeatNotification === undefined
+      ? {}
+      : { repeatNotification: request.repeatNotification }),
+    ...(request.baseNotificationKey === undefined
+      ? {}
+      : { baseNotificationKey: request.baseNotificationKey }),
+    ...(request.repeatSeq === undefined ? {} : { repeatSeq: request.repeatSeq }),
+    ...(request.isRepeat === undefined ? {} : { isRepeat: request.isRepeat }),
     message: request.message,
     source: {
       ...request.source,
@@ -484,4 +593,38 @@ function isAlreadyExistsError(error: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readRepeatState(data: unknown): {
+  lastNotifiedAt: Date;
+  repeatSeq: number;
+} | null {
+  if (!isRecord(data)) {
+    return null;
+  }
+
+  const lastNotifiedAt = data.lastNotifiedAt;
+  if (!isTimestampLike(lastNotifiedAt) || !isNonNegativeSafeInteger(data.repeatSeq)) {
+    return null;
+  }
+
+  return {
+    lastNotifiedAt: lastNotifiedAt.toDate(),
+    repeatSeq: data.repeatSeq,
+  };
+}
+
+function isTimestampLike(value: unknown): value is { toDate(): Date } {
+  return isRecord(value) && typeof value.toDate === "function";
+}
+
+function normalizeCastleId(baseId: string): string {
+  const prefix = "castle-";
+  return baseId.startsWith(prefix) ? baseId.slice(prefix.length) : baseId;
+}
+
+function createRepeatStateExpiresAt(battleDate: string): Date {
+  const battleDateStart = Date.parse(`${battleDate}T00:00:00.000Z`);
+  const baseTime = Number.isFinite(battleDateStart) ? battleDateStart : Date.now();
+  return new Date(baseTime + REPEAT_STATE_TTL_DAYS * MILLISECONDS_PER_DAY);
 }

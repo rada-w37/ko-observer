@@ -2,6 +2,7 @@ import {
   compareNotificationRulePriority,
   evaluateNotificationRule,
   evaluateRuleLevelNotification,
+  resolveEffectiveRepeatNotification,
   type NotificationObservation,
   type NotificationRequest,
   type NotificationRule,
@@ -33,6 +34,12 @@ export type NotificationCreateRequestResult =
       status: "duplicate";
     };
 
+export type NotificationCreateRepeatRequestResult =
+  | NotificationCreateRequestResult
+  | {
+      status: "skipped";
+    };
+
 type NotificationCoordinatorLogger = {
   info(message: string): void;
   warn(message: string): void;
@@ -45,6 +52,10 @@ type NotificationCoordinatorOptions = {
     requestId: string,
     request: NotificationRequest,
   ) => Promise<NotificationCreateRequestResult>;
+  createRepeatRequest?: (
+    request: NotificationRequest,
+    intervalSeconds: number,
+  ) => Promise<NotificationCreateRepeatRequestResult>;
   maxQueueSize?: number;
   logger?: NotificationCoordinatorLogger;
 };
@@ -53,6 +64,7 @@ type NotificationCandidate = {
   rule: NotificationRule;
   requestId: string;
   request: NotificationRequest;
+  repeatNotification: { enabled: true; intervalSeconds: number } | { enabled: false };
 };
 
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
@@ -86,6 +98,7 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
           rule,
           requestId: result.requestId,
           request: result.request,
+          repeatNotification: resolveEffectiveRepeatNotification(rule),
         });
       }
 
@@ -114,6 +127,7 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
           rule,
           requestId: result.requestId,
           request: result.request,
+          repeatNotification: { enabled: false },
         });
       }
 
@@ -201,6 +215,14 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
     options: { createAll: boolean },
   ): Promise<void> {
     for (const candidate of candidates) {
+      if (candidate.repeatNotification.enabled) {
+        const shouldStop = await this.createRepeatCandidateRequest(candidate, options);
+        if (shouldStop) {
+          return;
+        }
+        continue;
+      }
+
       if (this.seenRequestIds.has(candidate.requestId)) {
         this.skippedCount += 1;
         continue;
@@ -222,6 +244,48 @@ export class AsyncNotificationCoordinator implements NotificationCoordinator {
         this.logger.warn(`notification request create failed: ${formatErrorMessage(error)}`);
         return;
       }
+    }
+  }
+
+  private async createRepeatCandidateRequest(
+    candidate: NotificationCandidate,
+    options: { createAll: boolean },
+  ): Promise<boolean> {
+    if (!candidate.repeatNotification.enabled) {
+      return false;
+    }
+    if (!this.options.createRepeatRequest) {
+      this.failedCount += 1;
+      this.logger.warn(
+        `repeat notification request create failed: createRepeatRequest is not configured ruleId=${candidate.request.ruleId}`,
+      );
+      return true;
+    }
+
+    try {
+      const result = await this.options.createRepeatRequest(
+        candidate.request,
+        candidate.repeatNotification.intervalSeconds,
+      );
+      if (result.status === "duplicate") {
+        this.duplicateCount += 1;
+        return false;
+      }
+      if (result.status === "skipped") {
+        this.skippedCount += 1;
+        return false;
+      }
+
+      this.createdCount += 1;
+      this.logger.info(
+        `repeat notification request created ruleId=${candidate.request.ruleId}` +
+          ` rawBaseNotificationKey=${candidate.request.duplicateKey}`,
+      );
+      return !options.createAll;
+    } catch (error) {
+      this.failedCount += 1;
+      this.logger.warn(`repeat notification request create failed: ${formatErrorMessage(error)}`);
+      return true;
     }
   }
 

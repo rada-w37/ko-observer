@@ -210,6 +210,145 @@ test("creates notification request from Grand Battle observation", async () => {
   );
 });
 
+test("uses repeat request path without suppressing later observations by seenRequestIds", async () => {
+  let createCount = 0;
+  let repeatCreateCount = 0;
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [createRule({ repeatNotification: { enabled: true, intervalSeconds: 60 } })],
+    dryRun: false,
+    createRequest: async () => {
+      createCount += 1;
+      return { status: "created" };
+    },
+    createRepeatRequest: async () => {
+      repeatCreateCount += 1;
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observe(createObservation());
+  coordinator.observe(createObservation());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createCount, 0);
+  assert.equal(repeatCreateCount, 2);
+  assert.equal(flushed.createdCount, 2);
+});
+
+test("counts repeat interval skips without creating a normal notification request", async () => {
+  let createCount = 0;
+  let repeatCreateCount = 0;
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [createRule({ repeatNotification: { enabled: true, intervalSeconds: 60 } })],
+    dryRun: false,
+    createRequest: async () => {
+      createCount += 1;
+      return { status: "created" };
+    },
+    createRepeatRequest: async () => {
+      repeatCreateCount += 1;
+      return repeatCreateCount === 1 ? { status: "created" } : { status: "skipped" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observe(createObservation());
+  coordinator.observe(createObservation());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createCount, 0);
+  assert.equal(repeatCreateCount, 2);
+  assert.equal(flushed.createdCount, 1);
+  assert.equal(flushed.skippedCount, 1);
+});
+
+test("does not use repeat path for detail-rule-off rules even when repeat is enabled", async () => {
+  let createCount = 0;
+  let repeatCreateCount = 0;
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({
+        detailRuleEnabled: false,
+        repeatNotification: { enabled: true, intervalSeconds: 60 },
+      }),
+    ],
+    dryRun: false,
+    createRequest: async () => {
+      createCount += 1;
+      return { status: "created" };
+    },
+    createRepeatRequest: async () => {
+      repeatCreateCount += 1;
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observeRuleTick(createRuleTick());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(createCount, 1);
+  assert.equal(repeatCreateCount, 0);
+  assert.equal(flushed.createdCount, 1);
+});
+
+test("does not create repeat notification when detail conditions are not matched", async () => {
+  let repeatCreateCount = 0;
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({
+        detailConditions: {
+          operator: "OR",
+          children: [{ type: "condition", field: "defenseCount", operator: "<=", value: 1 }],
+        },
+        repeatNotification: { enabled: true, intervalSeconds: 60 },
+      }),
+    ],
+    dryRun: false,
+    createRequest: async () => ({ status: "created" }),
+    createRepeatRequest: async () => {
+      repeatCreateCount += 1;
+      return { status: "created" };
+    },
+    logger: createLogger(),
+  });
+
+  coordinator.observe(createObservation({ defenseCount: 2 }));
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.equal(repeatCreateCount, 0);
+  assert.equal(flushed.createdCount, 0);
+});
+
+test("falls back to next candidate when repeat notification is skipped by interval", async () => {
+  const createdRuleIds: string[] = [];
+  const coordinator = new AsyncNotificationCoordinator({
+    rules: [
+      createRule({
+        id: "rule-a",
+        sortOrder: 1,
+        repeatNotification: { enabled: true, intervalSeconds: 60 },
+      }),
+      createRule({ id: "rule-b", sortOrder: 2 }),
+    ],
+    dryRun: false,
+    createRequest: async (_requestId, request) => {
+      createdRuleIds.push(request.ruleId);
+      return { status: "created" };
+    },
+    createRepeatRequest: async () => ({ status: "skipped" }),
+    logger: createLogger(),
+  });
+
+  coordinator.observe(createObservation());
+  const flushed = await coordinator.flush({ timeoutMs: 100 });
+
+  assert.deepEqual(createdRuleIds, ["rule-b"]);
+  assert.equal(flushed.skippedCount, 1);
+  assert.equal(flushed.createdCount, 1);
+});
+
 test("creates notification request when body and username are empty", async () => {
   const createdRequests: NotificationRequest[] = [];
   const coordinator = new AsyncNotificationCoordinator({
@@ -337,6 +476,10 @@ function createRule(overrides: Partial<NotificationRule> = {}): NotificationRule
       mention: { type: "none" },
       titleTemplate: "{諡轤ｹ蜷閤",
       bodyTemplate: "{髦ｲ蠕｡謨ｰ}",
+    },
+    repeatNotification: {
+      enabled: false,
+      intervalSeconds: 300,
     },
     ...overrides,
   };
