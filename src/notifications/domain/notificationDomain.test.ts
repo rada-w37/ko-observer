@@ -511,9 +511,9 @@ test("keeps non-repeat request id unchanged and creates repeat request id from b
 test("resolves effective repeat notification only for detail rules with conditions and valid interval", () => {
   assert.deepEqual(
     resolveEffectiveRepeatNotification(
-      createRule({ repeatNotification: { enabled: true, intervalSeconds: 60 } }),
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: 30 } }),
     ),
-    { enabled: true, intervalSeconds: 60 },
+    { enabled: true, intervalSeconds: 30 },
   );
   assert.deepEqual(
     resolveEffectiveRepeatNotification(
@@ -532,7 +532,13 @@ test("resolves effective repeat notification only for detail rules with conditio
   );
   assert.deepEqual(
     resolveEffectiveRepeatNotification(
-      createRule({ repeatNotification: { enabled: true, intervalSeconds: 59 } }),
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: 29 } }),
+    ),
+    { enabled: false },
+  );
+  assert.deepEqual(
+    resolveEffectiveRepeatNotification(
+      createRule({ repeatNotification: { enabled: true, intervalSeconds: 2701 } }),
     ),
     { enabled: false },
   );

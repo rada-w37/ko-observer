@@ -213,15 +213,17 @@ test("creates notification request from Grand Battle observation", async () => {
 test("uses repeat request path without suppressing later observations by seenRequestIds", async () => {
   let createCount = 0;
   let repeatCreateCount = 0;
+  const repeatIntervals: number[] = [];
   const coordinator = new AsyncNotificationCoordinator({
-    rules: [createRule({ repeatNotification: { enabled: true, intervalSeconds: 60 } })],
+    rules: [createRule({ repeatNotification: { enabled: true, intervalSeconds: 30 } })],
     dryRun: false,
     createRequest: async () => {
       createCount += 1;
       return { status: "created" };
     },
-    createRepeatRequest: async () => {
+    createRepeatRequest: async (_request, intervalSeconds) => {
       repeatCreateCount += 1;
+      repeatIntervals.push(intervalSeconds);
       return { status: "created" };
     },
     logger: createLogger(),
@@ -233,6 +235,7 @@ test("uses repeat request path without suppressing later observations by seenReq
 
   assert.equal(createCount, 0);
   assert.equal(repeatCreateCount, 2);
+  assert.deepEqual(repeatIntervals, [30, 30]);
   assert.equal(flushed.createdCount, 2);
 });
 

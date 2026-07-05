@@ -18,7 +18,8 @@ const NOTIFICATION_REQUESTS_COLLECTION = "notificationRequests";
 const NOTIFICATION_REPEAT_STATES_COLLECTION = "notificationRepeatStates";
 const TITLE_TEMPLATE_MAX_LENGTH = 120;
 const DEFAULT_REPEAT_INTERVAL_SECONDS = 300;
-const MIN_REPEAT_INTERVAL_SECONDS = 60;
+const MIN_REPEAT_INTERVAL_SECONDS = 30;
+const MAX_REPEAT_INTERVAL_SECONDS = 2700;
 const REPEAT_STATE_TTL_DAYS = 7;
 const MILLISECONDS_PER_SECOND = 1000;
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -470,7 +471,8 @@ function normalizeRepeatNotification(value: unknown): NotificationRule["repeatNo
   if (
     value.enabled !== true ||
     !isSafeInteger(value.intervalSeconds) ||
-    value.intervalSeconds < MIN_REPEAT_INTERVAL_SECONDS
+    value.intervalSeconds < MIN_REPEAT_INTERVAL_SECONDS ||
+    value.intervalSeconds > MAX_REPEAT_INTERVAL_SECONDS
   ) {
     return {
       enabled: false,

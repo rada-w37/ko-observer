@@ -170,7 +170,8 @@ const DETAIL_RULE_OFF_UNAVAILABLE_VARIABLES = [
 ] as const;
 const MESSAGE_TITLE_MAX_LENGTH = 120;
 const TRUNCATED_TITLE_SUFFIX = "…";
-const MIN_REPEAT_INTERVAL_SECONDS = 60;
+const MIN_REPEAT_INTERVAL_SECONDS = 30;
+const MAX_REPEAT_INTERVAL_SECONDS = 2700;
 
 export function evaluateNotificationRule(
   rule: NotificationRule,
@@ -365,6 +366,9 @@ export function resolveEffectiveRepeatNotification(
     return { enabled: false };
   }
   if (rule.repeatNotification.intervalSeconds < MIN_REPEAT_INTERVAL_SECONDS) {
+    return { enabled: false };
+  }
+  if (rule.repeatNotification.intervalSeconds > MAX_REPEAT_INTERVAL_SECONDS) {
     return { enabled: false };
   }
   return {

@@ -102,11 +102,15 @@ test("normalizes invalid repeatNotification as disabled without skipping rules",
   const firestore = new FakeFirestore();
   firestore.seedRule("guild-a", "repeat-enabled", {
     ...createRuleData(),
-    repeatNotification: { enabled: true, intervalSeconds: 60 },
+    repeatNotification: { enabled: true, intervalSeconds: 30 },
   });
   firestore.seedRule("guild-a", "repeat-short-interval", {
     ...createRuleData(),
-    repeatNotification: { enabled: true, intervalSeconds: 30 },
+    repeatNotification: { enabled: true, intervalSeconds: 29 },
+  });
+  firestore.seedRule("guild-a", "repeat-too-long", {
+    ...createRuleData(),
+    repeatNotification: { enabled: true, intervalSeconds: 2701 },
   });
   firestore.seedRule("guild-a", "repeat-invalid", {
     ...createRuleData(),
@@ -135,10 +139,10 @@ test("normalizes invalid repeatNotification as disabled without skipping rules",
 
   const result = await loadNotificationRules(firestore as unknown as Firestore, "guild-a");
 
-  assert.equal(result.rules.length, 8);
+  assert.equal(result.rules.length, 9);
   assert.deepEqual(result.rules[0]?.repeatNotification, {
     enabled: true,
-    intervalSeconds: 60,
+    intervalSeconds: 30,
   });
   assert.deepEqual(result.rules[1]?.repeatNotification, {
     enabled: false,
@@ -165,6 +169,10 @@ test("normalizes invalid repeatNotification as disabled without skipping rules",
     intervalSeconds: 300,
   });
   assert.deepEqual(result.rules[7]?.repeatNotification, {
+    enabled: false,
+    intervalSeconds: 300,
+  });
+  assert.deepEqual(result.rules[8]?.repeatNotification, {
     enabled: false,
     intervalSeconds: 300,
   });
@@ -503,7 +511,7 @@ test("creates first repeat notification request and repeat state in a transactio
   const result = await createRepeatNotificationRequest(
     firestore as unknown as Firestore,
     request,
-    60,
+    30,
   );
 
   assert.deepEqual(result, { status: "created" });
@@ -512,7 +520,7 @@ test("creates first repeat notification request and repeat state in a transactio
   const storedRequest = firestore.requestData.get(firestore.createdRequestIds[0] ?? "");
   assert.deepEqual(storedRequest?.repeatNotification, {
     enabled: true,
-    intervalSeconds: 60,
+    intervalSeconds: 30,
   });
   assert.equal(storedRequest?.isRepeat, true);
   assert.equal(storedRequest?.repeatSeq, 1);
@@ -521,7 +529,7 @@ test("creates first repeat notification request and repeat state in a transactio
   const state = firestore.repeatStateData.get(storedRequest?.baseNotificationKey as string);
   assert.equal(state?.rawBaseNotificationKey, "duplicate-a");
   assert.equal(state?.repeatSeq, 1);
-  assert.equal(state?.intervalSeconds, 60);
+  assert.equal(state?.intervalSeconds, 30);
   assert.equal(state?.castleId, "1");
   assert.equal(state?.attackerGuildId, "guild-b");
   assert.equal(typeof state?.expiresAt, "object");
