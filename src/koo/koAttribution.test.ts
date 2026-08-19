@@ -79,7 +79,7 @@ test("adds pendingUnknownInitialKo when the next victim side is determined", () 
   assert.equal(result.state.pendingUnknownInitialKo, 0);
 });
 
-test("does not fully detect difficult 2 to 3 switch while mode is confirmed", () => {
+test("attributes a confirmed-mode switch to the currently decreasing side", () => {
   const previousState = createState({
     attributionMode: "defenseVictim",
     lastKoCount: 2,
@@ -92,9 +92,71 @@ test("does not fully detect difficult 2 to 3 switch while mode is confirmed", ()
     createObservation({ koCount: 3, defensePartyCount: 10, attackPartyCount: 9 }),
   );
 
-  assert.equal(result.state.attributionMode, "defenseVictim");
-  assert.equal(result.state.defenseVictimKoTotal, 9);
+  assert.equal(result.state.attributionMode, "unknown");
+  assert.equal(result.state.defenseVictimKoTotal, 8);
+  assert.equal(result.state.attackVictimKoTotal, 1);
   assert.equal(result.state.suspiciousSwitch, true);
+});
+
+test("keeps victim KO totals bound to the old guild after a defender change", () => {
+  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
+  const defenderVictim = applyKoObservation(
+    first.state,
+    createObservation({ koCount: 7, defensePartyCount: 3, attackPartyCount: 10 }),
+  );
+  const changed = applyKoObservation(
+    defenderVictim.state,
+    createObservation({
+      defenderGuildId: "2002001",
+      defenderGuildName: "Former Attacker",
+      attackerGuildId: null,
+      attackerGuildName: null,
+      koCount: 7,
+      defensePartyCount: 10,
+      attackPartyCount: 0,
+    }),
+  );
+
+  const totalsAfterChange = calculateGuildKoTotals([changed.state]);
+  assert.equal(changed.shouldPersistCastle, true);
+  assert.deepEqual(changed.reasons, ["guilds_changed"]);
+  assert.equal(totalsAfterChange.get("1001001")?.totalVictimKoCount, 7);
+  assert.equal(totalsAfterChange.get("2002001"), undefined);
+
+  const nextVictim = applyKoObservation(
+    changed.state,
+    createObservation({
+      defenderGuildId: "2002001",
+      defenderGuildName: "Former Attacker",
+      attackerGuildId: null,
+      attackerGuildName: null,
+      koCount: 8,
+      defensePartyCount: 9,
+      attackPartyCount: 0,
+    }),
+  );
+  const totalsAfterNextKo = calculateGuildKoTotals([nextVictim.state]);
+  assert.equal(totalsAfterNextKo.get("1001001")?.totalVictimKoCount, 7);
+  assert.equal(totalsAfterNextKo.get("2002001")?.totalVictimKoCount, 1);
+});
+
+test("does not assign ambiguous KO increases to the previously confirmed side", () => {
+  const previousState = createState({
+    attributionMode: "defenseVictim",
+    lastKoCount: 7,
+    lastDefensePartyCount: 3,
+    lastAttackPartyCount: 10,
+    defenseVictimKoTotal: 7,
+  });
+  const result = applyKoObservation(
+    previousState,
+    createObservation({ koCount: 8, defensePartyCount: 3, attackPartyCount: 10 }),
+  );
+
+  assert.equal(result.state.defenseVictimKoTotal, 7);
+  assert.equal(result.state.attackVictimKoTotal, 0);
+  assert.equal(result.state.unknownVictimKo, 1);
+  assert.equal(calculateGuildKoTotals([result.state]).get("1001001")?.totalVictimKoCount, 7);
 });
 
 test("creates checkpoint save only for castles with KO changes and keeps max total for merge", () => {
