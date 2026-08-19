@@ -70,6 +70,60 @@ test("writes castle detail without internal debug fields", async () => {
   assert.equal(stored.defender.koVictimCount, 7);
 });
 
+test("does not carry castle victim KO count to a new guild on the same side", async () => {
+  const firestore = new FakeFirestore();
+  const updatedAt = new Date("2026-06-10T11:45:30.000Z");
+
+  await writeCastleKoDetail(firestore as unknown as Firestore, {
+    castleId: 1,
+    updatedAt,
+    lastObservedAt: updatedAt,
+    defender: {
+      guildId: "1001001",
+      guildName: "Old Defender",
+      koVictimCount: 7,
+      lastCheckpointSlot: 1,
+      updatedAt,
+    },
+    attacker: {
+      guildId: "2002001",
+      guildName: "Attacker",
+      koVictimCount: 0,
+      lastCheckpointSlot: 1,
+      updatedAt,
+    },
+  });
+
+  await writeCastleKoDetail(firestore as unknown as Firestore, {
+    castleId: 1,
+    updatedAt: new Date("2026-06-10T11:46:00.000Z"),
+    lastObservedAt: new Date("2026-06-10T11:46:00.000Z"),
+    defender: {
+      guildId: "2002001",
+      guildName: "New Defender",
+      koVictimCount: 0,
+      lastCheckpointSlot: 2,
+      updatedAt: new Date("2026-06-10T11:46:00.000Z"),
+    },
+    attacker: {
+      guildId: null,
+      guildName: null,
+      koVictimCount: 0,
+      lastCheckpointSlot: 2,
+      updatedAt: new Date("2026-06-10T11:46:00.000Z"),
+    },
+  });
+
+  const stored = firestore.get("koObserverRuns/castleKoDetails/castleKoDetails/1") as {
+    defender: {
+      guildId: string;
+      koVictimCount: number;
+    };
+  };
+  assert.equal(stored.defender.guildId, "2002001");
+  assert.equal(stored.defender.koVictimCount, 0);
+});
+
 test("writes guild total without guildId field and keeps larger total", async () => {
   const firestore = new FakeFirestore();
   firestore.seed("koObserverViews/guildKoTotals/guildKoTotals/1001001", {

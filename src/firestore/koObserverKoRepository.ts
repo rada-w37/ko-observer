@@ -22,9 +22,11 @@ type WriteSeedGuildKoTotalInput = {
 
 type ExistingCastleKoDetail = {
   defender?: {
+    guildId?: string | null;
     koVictimCount?: number;
   };
   attacker?: {
+    guildId?: string | null;
     koVictimCount?: number;
   };
 };
@@ -93,9 +95,10 @@ export async function writeCastleKoDetail(
     defender: {
       guildId: snapshot.defender.guildId,
       guildName: snapshot.defender.guildName,
-      koVictimCount: Math.max(
+      koVictimCount: mergeCastleKoVictimCount(
+        snapshot.defender.guildId,
         snapshot.defender.koVictimCount,
-        existingData?.defender?.koVictimCount ?? 0,
+        existingData?.defender,
       ),
       lastCheckpointSlot: snapshot.defender.lastCheckpointSlot,
       updatedAt: Timestamp.fromDate(snapshot.defender.updatedAt),
@@ -103,9 +106,10 @@ export async function writeCastleKoDetail(
     attacker: {
       guildId: snapshot.attacker.guildId,
       guildName: snapshot.attacker.guildName,
-      koVictimCount: Math.max(
+      koVictimCount: mergeCastleKoVictimCount(
+        snapshot.attacker.guildId,
         snapshot.attacker.koVictimCount,
-        existingData?.attacker?.koVictimCount ?? 0,
+        existingData?.attacker,
       ),
       lastCheckpointSlot: snapshot.attacker.lastCheckpointSlot,
       updatedAt: Timestamp.fromDate(snapshot.attacker.updatedAt),
@@ -175,4 +179,16 @@ async function deleteSubcollection(
 
   await Promise.all(documents.map((documentReference) => documentReference.delete()));
   return documents.length;
+}
+
+function mergeCastleKoVictimCount(
+  guildId: string | null,
+  koVictimCount: number,
+  existingSide: ExistingCastleKoDetail["defender"] | undefined,
+): number {
+  if (existingSide?.guildId !== guildId) {
+    return koVictimCount;
+  }
+
+  return Math.max(koVictimCount, existingSide.koVictimCount ?? 0);
 }
