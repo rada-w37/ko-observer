@@ -125,6 +125,71 @@ test("aggregates Grand Battle realtime short guildId into participant guildId", 
   assert.equal(writtenTotals[1]?.get("110796857020")?.totalVictimKoCount, 7);
 });
 
+test("keeps guild totals separated when a realtime castle owner changes", async () => {
+  const writtenTotals: Array<Map<string, GuildKoTotalWriteInput>> = [];
+
+  await runPhase5KoObserveLoop(createConfig(), createFirestoreStub(), {
+    createRealtimeClient: () =>
+      createRealtimeClientStub([
+        createCastleStatusBytes({
+          guildId: 111111111,
+          attackerGuildId: 222222222,
+          koCount: 0,
+          defensePartyCount: 10,
+          attackPartyCount: 10,
+        }),
+        createCastleStatusBytes({
+          guildId: 111111111,
+          attackerGuildId: 222222222,
+          koCount: 7,
+          defensePartyCount: 3,
+          attackPartyCount: 10,
+        }),
+        createCastleStatusBytes({
+          guildId: 222222222,
+          attackerGuildId: 0,
+          koCount: 0,
+          defensePartyCount: 10,
+          attackPartyCount: 0,
+        }),
+        createCastleStatusBytes({
+          guildId: 222222222,
+          attackerGuildId: 0,
+          koCount: 1,
+          defensePartyCount: 9,
+          attackPartyCount: 0,
+        }),
+      ]),
+    initializePhase5KoObserverRun: async () => ({
+      deletedCastleKoDetailsCount: 0,
+      deletedGuildKoTotalsCount: 0,
+    }),
+    resolveBattleSubscriptionScope: async () => ({
+      battleType: "grandBattle",
+      subscriptionType: "grandBattle",
+      worldId: "1037",
+      guildId: "111111111037",
+      worldGroupId: 12,
+      classId: 3,
+      blockId: 2,
+      participantGuilds: [
+        { guildId: "111111111020", guildName: "Guild D" },
+        { guildId: "222222222020", guildName: "Guild A" },
+      ],
+    }),
+    writeCastleKoDetail: async () => {},
+    writeGuildKoTotals: async (_firestore, guildKoTotals) => {
+      writtenTotals.push(new Map(guildKoTotals));
+    },
+    now: createShortRunClock(),
+    sleep: async () => {},
+  });
+
+  const finalTotals = writtenTotals[writtenTotals.length - 1];
+  assert.equal(finalTotals?.get("111111111020")?.totalVictimKoCount, 7);
+  assert.equal(finalTotals?.get("222222222020")?.totalVictimKoCount, 1);
+});
+
 test("resolves monitor target from guildShares when manual world is not set", async () => {
   let resolvedInput: { worldId: string; guildId?: string } | null = null;
 
