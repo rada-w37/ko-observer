@@ -68,7 +68,8 @@ test("receiving and attribution continue while a save is pending; latest total i
     if (clock === 300) { assert.deepEqual(store.writes, [2]); release(); }
   });
   await runtime.run();
-  assert.ok(logs.some((line) => line.includes("revision=4 committedRevision=0")));
+  assert.ok(logs.some((line) => line.includes("revision=4") && line.includes("committedRevision=0")));
+  assert.ok(logs.some((line) => line.includes("summary") && line.includes("attributedKo=3") && line.includes("unknownKo=0")));
   assert.equal(calculateGuildKoTotals(store.saved!.accumulator.castleStates).get("111111111037")?.totalVictimKoCount, 3);
   assert.equal(store.saved!.accumulator.revision, 4);
   assert.equal(client.closed, 1); assert.equal(store.releases, 1);

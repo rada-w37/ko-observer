@@ -1,4 +1,5 @@
 import { KoAccumulator } from "../koo/koAccumulator.js";
+import type { KoPersistReason } from "../koo/koAttribution.js";
 import type { BattleSubscriptionScope } from "../koo/battleScopeResolver.js";
 import type { ObservationCheckpoint } from "../koo/observationRun.js";
 import { parseRealtimePayload, type RealtimePayloadBytes } from "../mentemori/realtimeParser.js";
@@ -15,6 +16,10 @@ export class KoObservationProcessor {
   private totalsDirty = false;
   private immediate = false;
   private processedCount = 0;
+  private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
+    ko_increased: 0, ko_decreased: 0, checkpoint_elapsed: 0, guilds_changed: 0,
+    rebased: 0, before_battle: 0, initial_or_unchanged: 0,
+  };
   private readonly fullGuildIds = new Map<string, string>();
 
   constructor(private readonly scope: ActiveBattleScope, private readonly checkpoint: ObservationCheckpoint,
@@ -34,8 +39,12 @@ export class KoObservationProcessor {
 
   process(payload: RealtimePayloadBytes, receivedAt: Date): { castleReceived: boolean; reconnect?: boolean } {
     const parsed = parseRealtimePayload(payload);
-    if (parsed.status === "error" || parsed.messages.some((message) => message.type === "unknown")) {
-      this.warn("Invalid realtime payload; disconnecting before further attribution.");
+    const invalidMessage = parsed.messages.find((message) => message.type === "unknown");
+    if (parsed.status === "error" || invalidMessage) {
+      const diagnostic = { status: parsed.status, reason: parsed.status === "error" ? parsed.error.message : invalidMessage?.reason,
+        payloadBytes: payload.length, offset: invalidMessage ? payload.length - invalidMessage.bytes.length : null,
+        streamId: invalidMessage?.streamId ?? null };
+      this.warn(`Invalid realtime payload; disconnecting before further attribution. details=${JSON.stringify(diagnostic)}`);
       return { castleReceived: false, reconnect: true };
     }
     this.ruleTick(receivedAt);
@@ -54,6 +63,10 @@ export class KoObservationProcessor {
         koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt });
       if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate = true; }
       this.totalsDirty ||= result.shouldUpdateGuildTotals;
+      for (const reason of result.reasons) this.decisionCounts[reason]++;
+      if (result.rebased) this.decisionCounts.rebased++;
+      if (result.checkpointSlot === null) this.decisionCounts.before_battle++;
+      else if (!result.rebased && result.reasons.length === 0) this.decisionCounts.initial_or_unchanged++;
       if (this.scope.guildId) this.notifySafely(() => this.notifications.observe({
         guildId: this.scope.guildId!, battleType: this.scope.battleType, castleId: message.castleId,
         castleName: resolveCastleName(this.scope.battleType, message.castleId) ?? createFallbackBaseName(message.castleId),
@@ -74,7 +87,13 @@ export class KoObservationProcessor {
   }
 
   get needsImmediateSave(): boolean { return this.immediate; }
-  get progress(): string { return `processedCastles=${this.processedCount} revision=${this.accumulator.currentRevision}`; }
+  get progress(): string {
+    const states = this.accumulator.exportSnapshot().castleStates;
+    const attributedKo = [...this.accumulator.getGuildTotals().values()].reduce((sum, total) => sum + total.totalVictimKoCount, 0);
+    const unknownKo = states.reduce((sum, state) => sum + state.unknownVictimKo, 0);
+    const pendingInitialKo = states.reduce((sum, state) => sum + state.pendingUnknownInitialKo, 0);
+    return `processedCastles=${this.processedCount} revision=${this.accumulator.currentRevision} attributedKo=${attributedKo} unknownKo=${unknownKo} pendingInitialKo=${pendingInitialKo} decisions=${JSON.stringify(this.decisionCounts)}`;
+  }
 
   takePublication(updatedAt: Date) {
     const publication = {
