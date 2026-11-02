@@ -8,6 +8,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:integration": "node --import tsx --test \"integration/**/*.test.ts\"",
+    "test:emulator": "npx --yes firebase-tools@15.17.0 emulators:exec --config firebase.test.json --only firestore --project demo-ko-observer \"npm run test:integration\"",
     "start": "node dist/app/main.js"
   },
   "engines": {

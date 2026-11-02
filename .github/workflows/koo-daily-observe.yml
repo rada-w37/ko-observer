@@ -30,6 +30,7 @@ jobs:
         run: npm run build
 
       - name: Run KOO daily observe
+        timeout-minutes: 52
         run: npm run start
         env:
           KOO_MODE: phase5-ko-observe-loop

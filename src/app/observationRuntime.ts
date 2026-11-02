@@ -20,6 +20,7 @@ export class ObservationRuntime {
   private lease?: ObservationLease;
   private publisher?: SnapshotPublisher;
   private processor?: KoObservationProcessor;
+  private session?: MonitoringSession;
   private renewing = false;
   private renewalError?: unknown;
   private lastRenewAt = 0;
@@ -54,6 +55,7 @@ export class ObservationRuntime {
         log: (message) => this.log(message), signal: this.options.signal, policy: this.policy,
         monotonicNow: this.monotonicNow, now: this.now, sleep: this.options.sleep, resumed,
       });
+      this.session = session;
       this.processor!.ruleTick(this.now());
       result = await session.run();
     } catch (error) { failure = error; }
@@ -61,7 +63,7 @@ export class ObservationRuntime {
       await withinDeadline(this.finalize(), this.policy.shutdownTimeoutMs, "Observation cleanup");
     } catch (error) { failure ??= error; }
     finally { this.stopping = true; this.publisher?.close(); }
-    this.log(`summary outcome=${failure ? "failed" : result?.outcome} received=${result?.receivedCount ?? 0} reconnects=${result?.reconnectCount ?? 0} ${this.processor?.progress ?? ""} committedRevision=${this.publisher?.status.committedRevision ?? 0}`);
+    this.log(`summary outcome=${failure ? "failed" : result?.outcome} received=${this.session?.counts.receivedCount ?? 0} reconnects=${this.session?.counts.reconnectCount ?? 0} ${this.processor?.progress ?? ""} committedRevision=${this.publisher?.status.committedRevision ?? 0}`);
     if (failure) throw failure;
     return result!;
   }

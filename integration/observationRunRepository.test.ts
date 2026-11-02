@@ -235,3 +235,17 @@ test("mutating a caller snapshot during commit cannot split its checkpoint and p
   assert.deepEqual(await publicTotals(), { [DEFENDER]: 7 });
   assert.equal((await castle(1).get()).data()?.defender.koVictimCount, 7);
 });
+
+test("unknown legacy date and corrupt runtime never trigger data initialization", async () => {
+  await total(DEFENDER).set({ totalVictimKoCount: 42 });
+  const repository = new ObservationRunRepository(firestore);
+  const lease = await repository.acquire();
+  await assert.rejects(repository.resume(lease, identity(), {}, STARTED_AT), /no valid battle date/);
+  await meta.set({ lastStartedAt: "invalid" });
+  await assert.rejects(repository.resume(lease, identity(), {}, STARTED_AT), /no valid battle date/);
+  assert.deepEqual(await publicTotals(), { [DEFENDER]: 42 });
+  await repository.release(lease);
+  await runtime.update({ fenceToken: "invalid" });
+  await assert.rejects(new ObservationRunRepository(firestore).acquire(), /Corrupt observation runtime/);
+  assert.deepEqual(await publicTotals(), { [DEFENDER]: 42 });
+});

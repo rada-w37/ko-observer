@@ -1,7 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import type { AppConfig } from "./config.js";
 import { ObservationRunRepository } from "../firestore/observationRunRepository.js";
-import type { ObservationLease } from "../koo/observationRun.js";
 import { fetchLatestLocalGvg } from "../mentemori/apiClient.js";
 import type { LocalGvgLatest } from "../mentemori/types.js";
 import { observationPolicy, withinDeadline } from "./observationPolicy.js";

@@ -79,6 +79,7 @@ test("ownership loss stops the receiver and does not claim a successful run", as
   await assert.rejects(runtime.run(), /owner changed/);
   assert.equal(client.closed, 1);
   assert.ok(logs.some((line) => line.includes("outcome=failed")));
+  assert.ok(logs.some((line) => line.includes("outcome=failed received=2")));
 });
 
 test("cancellation stops ingress and still flushes already processed observations", async () => {

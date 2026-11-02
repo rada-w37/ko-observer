@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
-import { Timestamp, type Firestore, type Transaction, type DocumentReference, type DocumentSnapshot } from "firebase-admin/firestore";
+import { Timestamp, type Firestore, type Transaction, type DocumentSnapshot } from "firebase-admin/firestore";
 import { calculateGuildKoTotals, createKoCastlePublicSnapshot } from "../koo/koAttribution.js";
 import { getJstDateString } from "../app/date.js";
 import { ObservationOwnershipError, type ObservationLease, type ObservationIdentity, type ObservationCheckpoint, type ObservationRunStore } from "../koo/observationRun.js";
@@ -29,6 +29,11 @@ export class ObservationRunRepository implements ObservationRunStore {
     return this.firestore.runTransaction(async (transaction) => {
       const runtime = await transaction.get(this.runtime);
       const current = runtime.data();
+      if (current && (!Number.isSafeInteger(current.fenceToken) || current.fenceToken < 1 ||
+          (current.ownerId !== null && (typeof current.ownerId !== "string" || current.ownerId.length === 0)) ||
+          !(current.expiresAt instanceof Timestamp))) {
+        throw new Error("Corrupt observation runtime; existing data preserved.");
+      }
       if (current?.ownerId && current.expiresAt.toMillis() > runtime.readTime.toMillis()) {
         throw new ObservationOwnershipError("Another observation or seed run is already active.");
       }
@@ -60,6 +65,10 @@ export class ObservationRunRepository implements ObservationRunStore {
       const previous = stored.exists ? decodeObservationCheckpoint(stored.data()) : undefined;
       const resumed = previous?.identity.sessionId === identity.sessionId;
       const legacyStarted = meta.data()?.lastStartedAt;
+      if (!previous && ((meta.exists && !(legacyStarted instanceof Timestamp)) ||
+          (!meta.exists && (oldCastles.size > 0 || oldTotals.size > 0)))) {
+        throw new Error("Legacy data has no valid battle date; existing data preserved.");
+      }
       if (!previous && legacyStarted instanceof Timestamp && getJstDateString(legacyStarted.toDate()) === identity.battleDate) {
         throw new Error("Legacy data exists for this battle date; switch at the next battle. Existing data preserved.");
       }

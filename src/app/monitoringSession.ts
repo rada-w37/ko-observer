@@ -43,6 +43,10 @@ export class MonitoringSession {
     this.hadGap = options.resumed ?? false;
   }
 
+  get counts(): { receivedCount: number; reconnectCount: number } {
+    return { receivedCount: this.receivedCount, reconnectCount: this.reconnectCount };
+  }
+
   async run(): Promise<MonitoringResult> {
     const end = this.monotonicNow() + this.options.durationMs;
     let nextProgressAt = this.monotonicNow() + this.policy.progressIntervalMs;
