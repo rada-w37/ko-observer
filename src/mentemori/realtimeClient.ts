@@ -1,136 +1,104 @@
+import WebSocket from "ws";
 import { createGuildBattleSubscriptionPayload } from "./streamId.js";
+import { observationPolicy } from "../app/observationPolicy.js";
 import type { RealtimePayloadBytes } from "./realtimeParser.js";
 
 export const GVG_REALTIME_WEBSOCKET_ENDPOINT = "wss://api.mentemori.icu/gvg";
-
-type WebSocketFactory = (endpoint: string) => WebSocketLike;
-
-type WebSocketMessageEventLike = {
-  data: unknown;
-};
-
-type WebSocketLike = {
-  binaryType?: string;
-  readyState: number;
-  addEventListener(type: "open", listener: () => void): void;
-  addEventListener(type: "close", listener: () => void): void;
-  addEventListener(type: "error", listener: () => void): void;
-  addEventListener(type: "message", listener: (event: WebSocketMessageEventLike) => void): void;
-  close(): void;
-  send(payload: Uint8Array): void;
-};
-
 export type GvgRealtimeClientEvent =
-  | { type: "opened" }
-  | { type: "subscriptionSent" }
-  | { type: "connected" }
-  | { type: "disconnected"; reason?: string }
+  | { type: "opened" } | { type: "subscriptionSent" } | { type: "connected" }
+  | { type: "disconnected"; reason?: string; code?: number }
   | { type: "payloadReceived"; payload: RealtimePayloadBytes }
   | { type: "error"; error: Error };
-
 export type GvgRealtimeClientListener = (event: GvgRealtimeClientEvent) => void;
-
-export type GvgRealtimeClientOptions = {
+export type GvgRealtimeSubscription = { payload: Uint8Array };
+type ClientOptions = {
   endpoint?: string;
-  createWebSocket?: WebSocketFactory;
+  createWebSocket?: (endpoint: string) => WebSocket;
+  connectTimeoutMs?: number;
+  pingIntervalMs?: number;
+  pongTimeoutMs?: number;
 };
-
-export type GvgRealtimeSubscription = {
-  payload: Uint8Array;
-};
-
-const WEBSOCKET_OPEN = 1;
 
 export class GvgRealtimeClient {
-  private readonly endpoint: string;
-  private readonly createWebSocket: WebSocketFactory;
   private readonly listeners = new Set<GvgRealtimeClientListener>();
-  private socket: WebSocketLike | null = null;
+  private socket?: WebSocket;
+  private cleanup?: () => void;
+  constructor(private readonly options: ClientOptions = {}) {}
 
-  constructor(options: GvgRealtimeClientOptions = {}) {
-    this.endpoint = options.endpoint ?? GVG_REALTIME_WEBSOCKET_ENDPOINT;
-    this.createWebSocket =
-      options.createWebSocket ??
-      ((endpoint) => {
-        const WebSocketConstructor = globalThis.WebSocket as
-          | (new (url: string) => WebSocketLike)
-          | undefined;
-        if (!WebSocketConstructor) {
-          throw new Error("WebSocket is not available in this Node.js runtime.");
-        }
-        return new WebSocketConstructor(endpoint);
-      });
-  }
-
-  connect(worldIdOrSubscription: string | GvgRealtimeSubscription): Promise<void> {
-    const socket = this.createWebSocket(this.endpoint);
-    socket.binaryType = "arraybuffer";
+  connect(subscription: string | GvgRealtimeSubscription): Promise<void> {
+    if (this.socket) return Promise.reject(new Error("WebSocket is already active."));
+    const socket = (this.options.createWebSocket ?? ((url) => new WebSocket(url, { perMessageDeflate: false })))(
+      this.options.endpoint ?? GVG_REALTIME_WEBSOCKET_ENDPOINT,
+    );
     this.socket = socket;
-
+    socket.binaryType = "arraybuffer";
     return new Promise((resolve, reject) => {
-      socket.addEventListener("open", () => {
-        this.emit({ type: "opened" });
-        socket.send(
-          typeof worldIdOrSubscription === "string"
-            ? createGuildBattleSubscriptionPayload(worldIdOrSubscription)
-            : worldIdOrSubscription.payload,
-        );
-        this.emit({ type: "subscriptionSent" });
-        this.emit({ type: "connected" });
-        resolve();
-      });
-      socket.addEventListener("message", (event) => {
-        void this.emitPayload(event.data);
-      });
-      socket.addEventListener("close", () => {
-        this.socket = null;
-        this.emit({ type: "disconnected", reason: "closed" });
-      });
-      socket.addEventListener("error", () => {
-        const error = new Error("GvG realtime WebSocket error");
-        this.emit({ type: "error", error });
+      let opened = false;
+      let finished = false;
+      let pingTimer: ReturnType<typeof setInterval> | undefined;
+      let pongTimer: ReturnType<typeof setTimeout> | undefined;
+      let expectedPong: string | undefined;
+      let sequence = 0;
+      const connectTimer = setTimeout(() => fail(new Error("WebSocket connect timed out.")), this.options.connectTimeoutMs ?? observationPolicy.connectTimeoutMs);
+      const finish = (reason: string, code?: number) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(connectTimer);
+        clearInterval(pingTimer);
+        clearTimeout(pongTimer);
+        if (this.socket === socket) this.socket = undefined;
+        this.cleanup = undefined;
+        if (!opened) reject(new Error(`WebSocket closed before subscription: ${reason}`));
+        this.emit({ type: "disconnected", reason, code });
+      };
+      const fail = (error: Error) => {
+        if (finished) return;
         reject(error);
+        finish(error.message);
+        socket.terminate();
+        this.emit({ type: "error", error });
+      };
+      this.cleanup = () => { finish("client stopped"); socket.terminate(); };
+      socket.on("error", fail);
+      socket.on("close", (code, reason) => finish(reason.toString() || "closed", code));
+      socket.on("open", () => {
+        if (finished) return;
+        this.emit({ type: "opened" });
+        socket.send(typeof subscription === "string" ? createGuildBattleSubscriptionPayload(subscription) : subscription.payload, (error) => {
+          if (finished) return;
+          if (error) { fail(error); return; }
+          opened = true;
+          clearTimeout(connectTimer);
+          this.emit({ type: "subscriptionSent" });
+          this.emit({ type: "connected" });
+          resolve();
+        });
+        pingTimer = setInterval(() => {
+          if (finished || expectedPong !== undefined) return;
+          expectedPong = String(++sequence);
+          pongTimer = setTimeout(() => fail(new Error("WebSocket pong timed out.")), this.options.pongTimeoutMs ?? observationPolicy.pongTimeoutMs);
+          socket.ping(expectedPong, true, (error: Error | undefined) => { if (error) fail(error); });
+        }, this.options.pingIntervalMs ?? observationPolicy.pingIntervalMs);
+      });
+      socket.on("pong", (payload) => {
+        if (payload.toString() !== expectedPong) return;
+        expectedPong = undefined;
+        clearTimeout(pongTimer);
+      });
+      socket.on("message", (payload, binary) => {
+        if (finished) return;
+        if (!binary || !(payload instanceof ArrayBuffer)) { fail(new Error("Unsupported WebSocket payload.")); return; }
+        this.emit({ type: "payloadReceived", payload: new Uint8Array(payload) });
       });
     });
   }
 
-  disconnect(reason?: string): void {
-    const socket = this.socket;
-    this.socket = null;
-    if (socket && socket.readyState === WEBSOCKET_OPEN) {
-      socket.close();
-    }
-    this.emit({ type: "disconnected", reason });
-  }
-
+  disconnect(_reason?: string): void { this.cleanup?.(); }
   addEventListener(listener: GvgRealtimeClientListener): () => void {
     this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return () => { this.listeners.delete(listener); };
   }
-
-  private async emitPayload(payload: unknown): Promise<void> {
-    if (payload instanceof ArrayBuffer) {
-      this.emit({ type: "payloadReceived", payload: new Uint8Array(payload) });
-      return;
-    }
-
-    if (ArrayBuffer.isView(payload)) {
-      this.emit({
-        type: "payloadReceived",
-        payload: new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength),
-      });
-      return;
-    }
-
-    const error = new Error("GvG realtime WebSocket received unsupported payload");
-    this.emit({ type: "error", error });
-  }
-
   private emit(event: GvgRealtimeClientEvent): void {
-    for (const listener of this.listeners) {
-      listener(event);
-    }
+    for (const listener of this.listeners) listener(event);
   }
 }
