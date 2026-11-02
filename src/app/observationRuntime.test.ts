@@ -30,9 +30,10 @@ class MemoryStore implements ObservationRunStore {
 
 class Client {
   private listener?: GvgRealtimeClientListener;
+  connected = 0;
   closed = 0;
   addEventListener(listener: GvgRealtimeClientListener) { this.listener = listener; return () => { this.listener = undefined; }; }
-  async connect() { this.send(0); this.send(1); }
+  async connect() { this.connected++; this.send(0); this.send(1); }
   disconnect() { this.closed++; }
   send(ko: number) {
     const bytes = new Uint8Array(24); const view = new DataView(bytes.buffer);
@@ -96,4 +97,54 @@ test("already-cancelled startup never acquires ownership or opens a socket", asy
   const { runtime, client } = fixture(store, () => {}, controller.signal);
   await assert.rejects(runtime.run(), /cancelled before startup/);
   assert.equal(client.closed, 0);
+});
+
+test("stopping during ownership acquisition releases the lease without rebuilding views", async (context) => {
+  for (const reason of ["cancelled", "duration reached"]) await context.test(reason, async () => {
+    const controller = new AbortController();
+    const store = new MemoryStore();
+    let finishAcquire!: (lease: ObservationLease) => void;
+    store.acquire = () => new Promise((resolve) => { finishAcquire = resolve; });
+    store.resume = async () => { assert.fail("must not rebuild views after stopping"); };
+    const { runtime, client } = fixture(store, () => {}, controller.signal);
+    const running = runtime.run();
+    controller.abort(reason);
+    finishAcquire({ ownerId: "test", fenceToken: 1, validUntil: 60_000 });
+    await assert.rejects(running, /cancelled/);
+    assert.equal(store.releases, 1);
+    assert.equal(client.connected, 0);
+    assert.deepEqual(store.writes, []);
+  });
+});
+
+test("stopping during resume does not open a socket or publish more data", async () => {
+  const controller = new AbortController();
+  const store = new MemoryStore();
+  const resume = store.resume.bind(store);
+  store.resume = async (...args) => {
+    const resumed = await resume(...args);
+    controller.abort("cancelled");
+    return resumed;
+  };
+  const { runtime, client, logs } = fixture(store, () => {}, controller.signal);
+  await assert.rejects(runtime.run(), /cancelled/);
+  assert.equal(store.releases, 1);
+  assert.equal(client.connected, 0);
+  assert.deepEqual(store.writes, []);
+  assert.ok(!logs.some((line) => line.includes("session=")));
+});
+
+test("final save failure is logged separately while preserving the cancellation error", async () => {
+  const controller = new AbortController();
+  const store = new MemoryStore();
+  const saveFailure = Object.assign(new Error("final save rejected"), { code: 7 });
+  let saveAttempts = 0;
+  store.commit = async () => { saveAttempts++; throw saveFailure; };
+  const { runtime, logs } = fixture(store, (clock) => { if (clock === 50) controller.abort(); }, controller.signal);
+  await assert.rejects(runtime.run(), /Observation cancelled/);
+  assert.equal(saveAttempts, 1);
+  const cleanupLog = logs.find((line) => line.includes("Observation cleanup failed"));
+  assert.ok(cleanupLog?.includes("final save rejected"));
+  assert.ok(cleanupLog?.includes('"code":7'));
+  assert.ok(logs.some((line) => line.includes("outcome=failed")));
 });

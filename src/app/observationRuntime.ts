@@ -42,8 +42,9 @@ export class ObservationRuntime {
     let result: MonitoringResult | undefined;
     let failure: unknown;
     try {
-      if (this.options.signal?.aborted) throw new Error("Observation cancelled before startup.");
+      this.ensureStartupNotCancelled();
       const resumed = await this.initialize();
+      this.ensureStartupNotCancelled();
       const session = new MonitoringSession({
         payload: this.options.payload, durationMs: Math.max(0, deadline - this.monotonicNow()),
         createClient: this.options.createClient ?? (() => new GvgRealtimeClient({
@@ -61,7 +62,12 @@ export class ObservationRuntime {
     } catch (error) { failure = error; }
     try {
       await withinDeadline(this.finalize(), this.policy.shutdownTimeoutMs, "Observation cleanup");
-    } catch (error) { failure ??= error; }
+    } catch (error) {
+      this.log(`Observation cleanup failed error=${JSON.stringify(error instanceof Error
+        ? { name: error.name, message: error.message, code: (error as { code?: string | number }).code }
+        : { message: String(error) })}`);
+      failure ??= error;
+    }
     finally { this.stopping = true; this.publisher?.close(); }
     this.log(`summary outcome=${failure ? "failed" : result?.outcome} received=${this.session?.counts.receivedCount ?? 0} reconnects=${this.session?.counts.reconnectCount ?? 0} ${this.processor?.progress ?? ""} committedRevision=${this.publisher?.status.committedRevision ?? 0}`);
     if (failure) throw failure;
@@ -70,6 +76,7 @@ export class ObservationRuntime {
 
   private async initialize(): Promise<boolean> {
     this.lease = await withinDeadline(this.options.store.acquire(), this.policy.operationTimeoutMs, "Acquire observation ownership");
+    this.ensureStartupNotCancelled();
     this.lastRenewAt = this.monotonicNow();
     const scope = this.options.scope;
     const participants = scope.subscriptionType === "grandBattle"
@@ -79,6 +86,7 @@ export class ObservationRuntime {
     const { checkpoint, resumed } = await withinDeadline(
       this.options.store.resume(this.lease, identity, participants, this.now()), this.policy.operationTimeoutMs, "Resume observation",
     );
+    this.ensureStartupNotCancelled();
     this.processor = new KoObservationProcessor(scope, checkpoint, this.options.notifications, this.options.runId, (message) => this.log(message));
     this.publisher = new SnapshotPublisher(checkpoint.accumulator.revision,
       (snapshot, castleIds, publishTotals) => this.options.store.commit(this.lease!, snapshot, castleIds, publishTotals),
@@ -127,4 +135,8 @@ export class ObservationRuntime {
   }
 
   private log(message: string): void { this.options.log(`${this.now().toISOString()} ${message}`); }
+
+  private ensureStartupNotCancelled(): void {
+    if (this.options.signal?.aborted) throw new Error("Observation cancelled before startup.");
+  }
 }
