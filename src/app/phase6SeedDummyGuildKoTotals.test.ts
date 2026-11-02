@@ -4,78 +4,37 @@ import type { Firestore } from "firebase-admin/firestore";
 import type { AppConfig } from "./config.js";
 import { runPhase6SeedDummyGuildKoTotals } from "./phase6SeedDummyGuildKoTotals.js";
 import type { LocalGvgLatest } from "../mentemori/types.js";
+const baseConfig: AppConfig = { firebaseProjectId: "test", firebaseClientEmail: "test@example.invalid", firebasePrivateKey: "stub", mode: "phase6-seed-dummy-guild-ko-totals", runId: "test", worldId: "1037", observeDurationSeconds: 120, observeIntervalSeconds: 1, seedClear: true, notificationsEnabled: false, notificationsDryRun: true };
 
-const baseConfig: AppConfig = {
-  firebaseProjectId: "project",
-  firebaseClientEmail: "client@example.com",
-  firebasePrivateKey: "private-key",
-  mode: "phase6-seed-dummy-guild-ko-totals",
-  runId: "local",
-  worldId: "1037",
-  observeDurationSeconds: 120,
-  observeIntervalSeconds: 1,
-  seedClear: true,
-  notificationsEnabled: false,
-  notificationsDryRun: true,
-};
-
-test("seeds dummy guild KO totals from real localgvg guild ids", async () => {
-  let clearCalled = false;
-  let metaSavedAt: Date | undefined;
-  const writtenTotals = new Map<string, { guildName: string | null; totalVictimKoCount: number; updatedAt: Date }>();
-
-  const result = await runPhase6SeedDummyGuildKoTotals(baseConfig, {} as Firestore, {
-    now: () => new Date("2026-06-10T12:00:00.000Z"),
-    fetchLatestLocalGvg: async () => createLocalGvgLatest(),
-    clearGuildKoTotals: async () => {
-      clearCalled = true;
-      return 2;
-    },
-    writeSeedGuildKoTotals: async (_firestore, input) => {
-      for (const [guildId, total] of input) {
-        writtenTotals.set(guildId, total);
-      }
-    },
-    writeKoObserverRunMeta: async (_firestore, lastStartedAt) => {
-      metaSavedAt = lastStartedAt;
-    },
+for (const clear of [true, false]) {
+  test(`seeds selected real guilds under exclusive ownership; clear=${clear}`, async () => {
+    const calls: string[] = [];
+    const updatedAt = new Date("2026-06-10T12:00:00Z");
+    const result = await runPhase6SeedDummyGuildKoTotals({ ...baseConfig, seedClear: clear }, {} as Firestore, {
+      fetchLatestLocalGvg: async () => createLocalGvgLatest(), now: () => updatedAt,
+      createStore: () => ({
+        acquire: async () => { calls.push("acquire"); return { ownerId: "test", fenceToken: 1, validUntil: 1e9 }; },
+        seed: async (_lease, totals, shouldClear, startedAt) => {
+          calls.push("seed"); assert.equal(shouldClear, clear); assert.equal(startedAt, updatedAt);
+          assert.deepEqual([...totals.keys()], ["1037001", "1037002", "1037003", "1037004", "1037005"]);
+          assert.deepEqual([...totals.values()].map((total) => total.totalVictimKoCount), [12, 7, 3, 0, 5]);
+          return clear ? 2 : 0;
+        },
+        release: async () => { calls.push("release"); },
+      }),
+    });
+    assert.deepEqual(calls, ["acquire", "seed", "release"]);
+    assert.deepEqual(result, { fetchedGuildCount: 6, selectedGuildCount: 5, clearedGuildKoTotalsCount: clear ? 2 : 0, writtenGuildKoTotalsCount: 5 });
   });
+}
 
-  assert.equal(clearCalled, true);
-  assert.equal(metaSavedAt?.toISOString(), "2026-06-10T12:00:00.000Z");
-  assert.deepEqual([...writtenTotals.keys()], ["1037001", "1037002", "1037003", "1037004", "1037005"]);
-  assert.deepEqual(
-    [...writtenTotals.values()].map((total) => total.totalVictimKoCount),
-    [12, 7, 3, 0, 5],
-  );
-  assert.equal(result.fetchedGuildCount, 6);
-  assert.equal(result.selectedGuildCount, 5);
-  assert.equal(result.clearedGuildKoTotalsCount, 2);
-  assert.equal(result.writtenGuildKoTotalsCount, 5);
-});
-
-test("does not clear guildKoTotals when seedClear is false", async () => {
-  let clearCalled = false;
-
-  const result = await runPhase6SeedDummyGuildKoTotals(
-    {
-      ...baseConfig,
-      seedClear: false,
-    },
-    {} as Firestore,
-    {
-      fetchLatestLocalGvg: async () => createLocalGvgLatest(),
-      clearGuildKoTotals: async () => {
-        clearCalled = true;
-        return 1;
-      },
-      writeSeedGuildKoTotals: async () => undefined,
-      writeKoObserverRunMeta: async () => undefined,
-    },
-  );
-
-  assert.equal(clearCalled, false);
-  assert.equal(result.clearedGuildKoTotalsCount, 0);
+test("does not seed when another run owns the public views", async () => {
+  let wrote = false;
+  await assert.rejects(runPhase6SeedDummyGuildKoTotals(baseConfig, {} as Firestore, {
+    fetchLatestLocalGvg: async () => createLocalGvgLatest(),
+    createStore: () => ({ acquire: async () => { throw new Error("already active"); }, seed: async () => { wrote = true; return 0; }, release: async () => {} }),
+  }), /already active/);
+  assert.equal(wrote, false);
 });
 
 function createLocalGvgLatest(): LocalGvgLatest {

@@ -7,6 +7,7 @@ import { runPhase1ScopeTest } from "./phase1ScopeTest.js";
 import { createFirestore } from "../firestore/admin.js";
 import { writePhase0SmokeTestView } from "../firestore/koObserverViewRepository.js";
 import { logger } from "../shared/logger.js";
+import { runWithObservationShutdown } from "./observationShutdown.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -32,13 +33,17 @@ async function main(): Promise<void> {
   }
 
   if (config.mode === "phase5-ko-observe-loop") {
-    await runPhase5KoObserveLoop(config, firestore);
+    await runWithObservationShutdown(
+      (signal) => runPhase5KoObserveLoop(config, firestore, { signal }),
+      () => firestore.terminate(), config.observeDurationSeconds * 1000,
+    );
     logger.info(`KOO Phase5 KO observe loop completed. worldId=${config.worldId}`);
     return;
   }
 
   if (config.mode === "phase6-seed-dummy-guild-ko-totals") {
-    await runPhase6SeedDummyGuildKoTotals(config, firestore);
+    await runWithObservationShutdown(async () => { await runPhase6SeedDummyGuildKoTotals(config, firestore); },
+      () => firestore.terminate(), 90_000);
     logger.info(`KOO Phase6 dummy guild KO totals seed completed. worldId=${config.worldId}`);
     return;
   }

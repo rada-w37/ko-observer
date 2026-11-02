@@ -99,13 +99,14 @@ export class ObservationRunRepository implements ObservationRunStore {
     });
   }
 
-  async seed(lease: ObservationLease, totals: Map<string, { guildName: string; totalVictimKoCount: number; updatedAt: Date }>, clear: boolean): Promise<number> {
+  async seed(lease: ObservationLease, totals: Map<string, { guildName: string; totalVictimKoCount: number; updatedAt: Date }>, clear: boolean, updatedAt = new Date()): Promise<number> {
     return this.firestore.runTransaction(async (transaction) => {
       await this.checkOwner(transaction, lease);
       const previous = await transaction.get(this.totals);
       if (clear) previous.docs.forEach((document) => transaction.delete(document.ref));
       for (const [guildId, total] of totals) transaction.set(this.totals.doc(guildId), { ...total, updatedAt: Timestamp.fromDate(total.updatedAt) });
       transaction.update(this.runtime, { publishedSessionId: "seed" });
+      transaction.set(this.meta, { lastStartedAt: Timestamp.fromDate(updatedAt) });
       return clear ? previous.size : 0;
     });
   }

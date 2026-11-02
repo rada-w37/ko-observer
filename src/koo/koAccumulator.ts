@@ -33,6 +33,8 @@ export class KoAccumulator {
     this.observedCastleIds.clear();
   }
 
+  get currentRevision(): number { return this.revision; }
+
   observe(observation: KoCastleObservation): KoAccumulatorUpdate {
     const previousState = this.castleStates.get(observation.castleId);
     const rebased = previousState !== undefined && !this.observedCastleIds.has(observation.castleId);
