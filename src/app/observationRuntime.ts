@@ -90,7 +90,8 @@ export class ObservationRuntime {
     this.processor = new KoObservationProcessor(scope, checkpoint, this.options.notifications, this.options.runId, (message) => this.log(message));
     this.publisher = new SnapshotPublisher(checkpoint.accumulator.revision,
       (snapshot, castleIds, publishTotals) => this.options.store.commit(this.lease!, snapshot, castleIds, publishTotals),
-      this.monotonicNow, this.policy.operationTimeoutMs, (message) => this.log(message));
+      this.monotonicNow, this.policy.operationTimeoutMs, (message) => this.log(message),
+      (result) => this.log(`Observation save completed details=${JSON.stringify(result)}`));
     this.lastOfferAt = this.monotonicNow();
     this.log(`session=${identity.sessionId} resumed=${resumed} revision=${checkpoint.accumulator.revision}${resumed ? " observation gap: process restarted; missing data will not be restored" : ""}`);
     return resumed;

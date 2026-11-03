@@ -1,4 +1,4 @@
-import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate } from "./koAttributionCandidates.js";
+import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate, type KoBattleCounts, type KoTransition } from "./koAttributionCandidates.js";
 
 export type KoCastleObservation = {
   castleId: number;
@@ -59,6 +59,7 @@ export type KoStateUpdateResult = {
   shouldUpdateGuildTotals: boolean;
   checkpointSlot: number | null;
   reasons: KoPersistReason[];
+  decision: { previous: KoBattleCounts | null; current: KoBattleCounts; transitions: Array<KoTransition | "baseline" | "reset" | "model_mismatch">; defenseCredit: number; attackCredit: number };
 };
 
 export type KoPersistReason =
@@ -114,13 +115,16 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   state.defenderGuildId = observation.defenderGuildId; state.defenderGuildName = observation.defenderGuildName;
   state.attackerGuildId = observation.attackerGuildId; state.attackerGuildName = observation.attackerGuildName;
   let defenseCredit = 0, attackCredit = 0;
+  const current = { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount };
+  const decision: KoStateUpdateResult["decision"] = { previous: null, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
   if (checkpointSlot !== null && state.lastKoCount !== null && state.lastDefensePartyCount !== null && state.lastAttackPartyCount !== null) {
     const previousKo = state.lastKoCount;
-    if (observation.koCount === 0) state = resetKoEvidence(state);
+    decision.previous = { ko: previousKo, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount };
+    if (observation.koCount === 0) { state = resetKoEvidence(state); decision.transitions = ["reset"]; }
     else {
       const result = advanceKoCandidates(state.candidates,
-        { ko: state.lastKoCount, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount },
-        { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount }, minimumFreshPartySize(observation.castleId));
+        decision.previous, current, minimumFreshPartySize(observation.castleId));
+      decision.transitions = result.candidates.length ? result.transitions : ["model_mismatch"];
       if (!result.candidates.length) { state = resetKoEvidence(state); state.modelMismatchCount++; reasons.push("model_mismatch"); }
       else {
         state.candidates = result.candidates;
@@ -140,7 +144,8 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   state.lastUpdatedAt = observation.observedAt;
   state.lastCheckpointSlot = checkpointSlot;
   updateLastRawCounts(state, observation);
-  return { state, shouldPersistCastle: changed || defenseCredit + attackCredit > 0 || reasons.length > 0,
+  decision.defenseCredit = defenseCredit; decision.attackCredit = attackCredit;
+  return { state, decision, shouldPersistCastle: changed || defenseCredit + attackCredit > 0 || reasons.length > 0,
     shouldUpdateGuildTotals: defenseCredit + attackCredit > 0, checkpointSlot, reasons };
 }
 

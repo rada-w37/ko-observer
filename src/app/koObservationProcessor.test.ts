@@ -36,6 +36,25 @@ test("progress distinguishes a confirmed KO from pending attribution", () => {
   assert.match(processor.progress, /attributedKo=6 pendingKo=0\.\.0/);
 });
 
+test("publication logs input, viable transitions and confirmed credit in bounded batches", () => {
+  const { processor, logs } = fixture();
+  processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(3, 99), observedAt);
+  processor.process(castlePayload(3, 99, 222222222), observedAt);
+  for (let i = 0; i < 127; i++) processor.process(castlePayload(3, 99, 222222222), observedAt);
+  assert.equal(logs.length, 0);
+  processor.takePublication(observedAt);
+  assert.match(logs[0], /omitted=2/);
+  const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
+  assert.equal(decisions.length, 128);
+  assert.equal(decisions[1].minimumFreshPartySize, 3);
+  assert.equal(decisions[1].defenseCredit, 3);
+  assert.deepEqual(decisions[1].previous, { ko: 0, defense: 100, attack: 100 });
+  assert.ok(decisions.at(-1).transitions.includes("switch"));
+  processor.takePublication(observedAt);
+  assert.equal(logs.length, 1);
+});
+
 test("invalid payload diagnostics retain parser reasons and location without raw data or partial attribution", async (context) => {
   const streamId = new DataView(castlePayload().buffer).getUint32(0, true);
   const unknownStreamId = (streamId & ~31) | 22;

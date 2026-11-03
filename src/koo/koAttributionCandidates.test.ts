@@ -51,6 +51,9 @@ test("compressed ranges agree with independently enumerated battle histories", (
       histories = [...new Map(expanded.map((h) => [JSON.stringify(h), h])).values()].map((h) => ({ ...h, defense: h.defense - defense, attack: h.attack - attack }));
       const result = advanceKoCandidates(candidates, previous, current, minimum);
       assert.equal(result.defenseCredit, defense); assert.equal(result.attackCredit, attack);
+      assert.deepEqual(new Set(result.candidates.map((candidate) => candidate.side)),
+        new Set(histories.map((history) => history.side === 0 ? "defense" : "attack")));
+      assert.ok(result.candidates.length <= 2);
       for (const candidate of result.candidates) {
         const matching = histories.filter((h) => h.side === (candidate.side === "defense" ? 0 : 1));
         const amounts = matching.map((h) => [h.defense, h.attack, h.defense + h.attack]);

@@ -1,10 +1,15 @@
 export type VictimSide = "defense" | "attack";
+export type KoTransition = "no_battle" | "continuation" | "switch";
 export type KoCandidate = { side: VictimSide; min: [number, number, number]; max: [number, number, number] };
 export type KoBattleCounts = { ko: number; defense: number; attack: number };
 
-export function minimumFreshPartySize(castleId: number): 2 | 3 {
+export function battleCastleKind(castleId: number): "temple" | "castle" | "church" {
   if (!Number.isInteger(castleId) || castleId < 1 || castleId > 21) throw new Error("Unknown battle castle.");
-  return castleId <= 5 ? 3 : 2;
+  return castleId === 1 ? "temple" : castleId <= 5 ? "castle" : "church";
+}
+
+export function minimumFreshPartySize(castleId: number): 2 | 3 {
+  return battleCastleKind(castleId) === "church" ? 2 : 3;
 }
 
 export function initialKoCandidates(): KoCandidate[] {
@@ -12,14 +17,16 @@ export function initialKoCandidates(): KoCandidate[] {
 }
 
 export function advanceKoCandidates(candidates: readonly KoCandidate[], previous: KoBattleCounts,
-  current: KoBattleCounts, minimum: 2 | 3): { candidates: KoCandidate[]; defenseCredit: number; attackCredit: number } {
+  current: KoBattleCounts, minimum: 2 | 3): { candidates: KoCandidate[]; defenseCredit: number; attackCredit: number; transitions: KoTransition[] } {
+  const transitions = new Set<KoTransition>();
   const groups = new Map<VictimSide, KoCandidate>();
   const defenseDelta = current.defense - previous.defense;
   const attackDelta = current.attack - previous.attack;
   const delta = current.ko - previous.ko;
   const fits = (side: VictimSide) => side === "defense"
     ? defenseDelta >= -1 && attackDelta >= 0 : attackDelta >= -1 && defenseDelta >= 0;
-  const add = (source: KoCandidate, side: VictimSide, defense: number, attack: number) => {
+  const add = (source: KoCandidate, side: VictimSide, defense: number, attack: number, transition: KoTransition) => {
+    transitions.add(transition);
     const credit = [defense, attack, defense + attack];
     const next: KoCandidate = { side, min: source.min.map((n, i) => n + credit[i]) as KoCandidate["min"],
       max: source.max.map((n, i) => n + credit[i]) as KoCandidate["max"] };
@@ -31,13 +38,13 @@ export function advanceKoCandidates(candidates: readonly KoCandidate[], previous
     groups.set(side, next);
   };
   for (const candidate of candidates) {
-    if (delta === 0 && defenseDelta >= 0 && attackDelta >= 0) add(candidate, candidate.side, 0, 0);
+    if (delta === 0 && defenseDelta >= 0 && attackDelta >= 0) add(candidate, candidate.side, 0, 0, "no_battle");
     if (delta >= minimum && delta <= 5 && fits(candidate.side)) {
-      add(candidate, candidate.side, candidate.side === "defense" ? delta : 0, candidate.side === "attack" ? delta : 0);
+      add(candidate, candidate.side, candidate.side === "defense" ? delta : 0, candidate.side === "attack" ? delta : 0, "continuation");
     }
     const opposite = candidate.side === "defense" ? "attack" : "defense";
     if (current.ko >= 1 && current.ko <= 5 && fits(opposite)) {
-      add(candidate, opposite, opposite === "defense" ? current.ko : 0, opposite === "attack" ? current.ko : 0);
+      add(candidate, opposite, opposite === "defense" ? current.ko : 0, opposite === "attack" ? current.ko : 0, "switch");
     }
   }
   const next = [...groups.values()];
@@ -46,5 +53,5 @@ export function advanceKoCandidates(candidates: readonly KoCandidate[], previous
   const credited = [defenseCredit, attackCredit, defenseCredit + attackCredit];
   return { candidates: next.map((candidate) => ({ ...candidate,
     min: candidate.min.map((n, i) => n - credited[i]) as KoCandidate["min"],
-    max: candidate.max.map((n, i) => n - credited[i]) as KoCandidate["max"] })), defenseCredit, attackCredit };
+    max: candidate.max.map((n, i) => n - credited[i]) as KoCandidate["max"] })), defenseCredit, attackCredit, transitions: [...transitions] };
 }

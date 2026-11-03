@@ -1,3 +1,4 @@
+import { battleCastleKind, minimumFreshPartySize } from "../koo/koAttributionCandidates.js";
 import { KoAccumulator } from "../koo/koAccumulator.js";
 import type { KoPersistReason } from "../koo/koAttribution.js";
 import type { BattleSubscriptionScope } from "../koo/battleScopeResolver.js";
@@ -9,6 +10,8 @@ import type { NotificationCoordinator } from "../notifications/application/notif
 
 export type ActiveBattleScope = Exclude<BattleSubscriptionScope, { subscriptionType: "none" }>;
 
+const MAX_DIAGNOSTIC_DECISIONS = 128;
+
 export class KoObservationProcessor {
   readonly accumulator;
   private readonly guildNames;
@@ -16,6 +19,8 @@ export class KoObservationProcessor {
   private totalsDirty = false;
   private immediate = false;
   private processedCount = 0;
+  private readonly diagnosticDecisions: Array<Record<string, unknown>> = [];
+  private omittedDecisions = 0;
   private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
     ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0,
     rebased: 0, before_battle: 0, initial_or_unchanged: 0,
@@ -65,6 +70,13 @@ export class KoObservationProcessor {
       this.totalsDirty ||= result.shouldUpdateGuildTotals;
       for (const reason of result.reasons) this.decisionCounts[reason]++;
       if (result.rebased) this.decisionCounts.rebased++;
+      if (result.checkpointSlot !== null && result.decision.transitions.some((transition) => transition !== "no_battle")) {
+        if (this.diagnosticDecisions.length >= MAX_DIAGNOSTIC_DECISIONS) this.omittedDecisions++;
+        else this.diagnosticDecisions.push({ castleId: message.castleId, castleKind: battleCastleKind(message.castleId),
+          minimumFreshPartySize: minimumFreshPartySize(message.castleId), observedAt: receivedAt.toISOString(),
+          defenderGuildId: ownerGuildId, attackerGuildId, rebased: result.rebased, reasons: result.reasons,
+          ...result.decision, candidates: result.state.candidates });
+      }
       if (result.checkpointSlot === null) this.decisionCounts.before_battle++;
       else if (!result.rebased && result.reasons.length === 0) this.decisionCounts.initial_or_unchanged++;
       if (this.scope.guildId) this.notifySafely(() => this.notifications.observe({
@@ -96,6 +108,11 @@ export class KoObservationProcessor {
   }
 
   takePublication(updatedAt: Date) {
+    if (this.diagnosticDecisions.length) {
+      this.warn(`KO attribution revision=${this.accumulator.currentRevision} omitted=${this.omittedDecisions} decisions=${JSON.stringify(this.diagnosticDecisions)}`);
+      this.diagnosticDecisions.length = 0;
+      this.omittedDecisions = 0;
+    }
     const publication = {
       checkpoint: { ...this.checkpoint, accumulator: this.accumulator.exportSnapshot(), guildNames: { ...this.guildNames }, updatedAt },
       castleIds: [...this.pendingCastles], publishTotals: this.totalsDirty,

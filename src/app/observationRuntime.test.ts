@@ -160,7 +160,7 @@ test("confirmed changes reach both public projections in the next five-second sa
     saves.push({ time, total: checkpoint.accumulator.castleStates[0].defenseVictimKoTotal, castles, publishTotals });
     await commit(lease, checkpoint, castles, publishTotals);
   };
-  const { runtime } = fixture(store, (clock, client) => {
+  const { runtime, logs } = fixture(store, (clock, client) => {
     time = clock;
     if (clock === 1000) client.send(6);
     if (clock === 2000) client.send(9);
@@ -172,4 +172,7 @@ test("confirmed changes reach both public projections in the next five-second sa
   ]);
   assert.ok(saves[0].time >= 5000 && saves[0].time <= 5050);
   assert.ok(saves[1].time >= 10000 && saves[1].time <= 10050);
+  const completed = logs.filter((line) => line.includes("Observation save completed"));
+  assert.equal(completed.length, 2);
+  assert.match(completed[0], /"revision":4,"elapsedMs":\d+,"castleIds":\[1\],"publishTotals":true/);
 });

@@ -15,6 +15,7 @@ export class SnapshotPublisher {
   constructor(revision: number,
     private readonly commit: (checkpoint: ObservationCheckpoint, castleIds: number[], publishTotals: boolean) => Promise<void>,
     private readonly now: () => number, private readonly timeoutMs: number, private readonly warn: (message: string) => void,
+    private readonly onCommit?: (result: { revision: number; elapsedMs: number; castleIds: number[]; publishTotals: boolean }) => void,
   ) { this.committedRevision = revision; }
 
   offer(checkpoint: ObservationCheckpoint, castleIds: number[], publishTotals: boolean): void {
@@ -38,7 +39,11 @@ export class SnapshotPublisher {
     this.pending = undefined;
     this.inFlightSince = this.now();
     this.task = Promise.resolve().then(() => this.commit(request.checkpoint, request.castleIds, request.publishTotals))
-      .then(() => { this.committedRevision = request.checkpoint.accumulator.revision; this.failures = 0; })
+      .then(() => {
+        this.committedRevision = request.checkpoint.accumulator.revision; this.failures = 0;
+        this.onCommit?.({ revision: this.committedRevision, elapsedMs: Math.round(this.now() - this.inFlightSince),
+          castleIds: request.castleIds, publishTotals: request.publishTotals });
+      })
       .catch((error: unknown) => {
         const failure = error instanceof Error ? error : new Error(String(error));
         const code = (error as { code?: number })?.code;
