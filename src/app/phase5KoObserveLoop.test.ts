@@ -18,7 +18,7 @@ class MemoryStore implements ObservationRunStore {
   async renew(lease: ObservationLease) { return lease; }
   async resume(_lease: ObservationLease, identity: ObservationIdentity, participants: Record<string, string>, startedAt: Date) {
     const resumed = this.checkpoint?.identity.sessionId === identity.sessionId;
-    this.checkpoint ??= { schemaVersion: 1, identity, accumulator: { revision: 0, castleStates: [] }, guildNames: { ...participants }, participantGuilds: { ...participants }, updatedAt: startedAt };
+    this.checkpoint ??= { schemaVersion: 2, identity, accumulator: { revision: 0, castleStates: [] }, guildNames: { ...participants }, participantGuilds: { ...participants }, updatedAt: startedAt };
     return { checkpoint: structuredClone(this.checkpoint), resumed };
   }
   async commit(_lease: ObservationLease, checkpoint: ObservationCheckpoint) {
@@ -65,15 +65,15 @@ test("Guild Battle does not add participant seeds", async () => {
 });
 
 test("normalizes Grand Battle short guild ids to their participant worlds", async () => {
-  const store = await run([castle(), castle({ ko: 7, defense: 3 })], {}, new MemoryStore(), grandScope);
+  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 })], {}, new MemoryStore(), grandScope);
   assert.equal(store.totals().get("111111111020")?.totalVictimKoCount, 7);
   assert.equal(store.totals().has("111111111037"), false);
 });
 
 test("retains old owner totals after a castle ownership change", async () => {
-  const store = await run([castle(), castle({ ko: 7, defense: 3 }), castle({ guildId: 222222222, ko: 0 }), castle({ guildId: 222222222, ko: 1, defense: 9 })]);
+  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 }), castle({ guildId: 222222222, ko: 0 }), castle({ guildId: 222222222, ko: 3, defense: 9 })]);
   assert.equal(store.totals().get("111111111037")?.totalVictimKoCount, 7);
-  assert.equal(store.totals().get("222222222037")?.totalVictimKoCount, 1);
+  assert.equal(store.totals().get("222222222037")?.totalVictimKoCount, 3);
 });
 
 test("resolves production target through guildShares", async () => {
@@ -85,7 +85,7 @@ test("resolves production target through guildShares", async () => {
 
 test("notification observe failure does not stop KO persistence", async () => {
   const coordinator = new NoopNotificationCoordinator(); coordinator.observe = () => { throw new Error("notification failed"); };
-  const store = await run([castle(), castle({ ko: 7, defense: 3 })], { createNotificationCoordinator: async () => coordinator });
+  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 })], { createNotificationCoordinator: async () => coordinator });
   assert.equal(store.totals().get("111111111037")?.totalVictimKoCount, 7);
 });
 
@@ -128,7 +128,7 @@ for (const result of [{ status: "empty", message: "No guild configuration found.
 }
 
 test("same battle restart resumes saved totals and rebases the first observation", async () => {
-  const store = await run([castle(), castle({ ko: 7, defense: 3 })]);
-  await run([castle({ ko: 50, defense: 80 }), castle({ ko: 51, defense: 79 })], {}, store);
-  assert.equal(store.totals().get("111111111037")?.totalVictimKoCount, 8);
+  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 })]);
+  await run([castle({ ko: 50, defense: 80 }), castle({ ko: 53, defense: 79 })], {}, store);
+  assert.equal(store.totals().get("111111111037")?.totalVictimKoCount, 10);
 });

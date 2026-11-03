@@ -1,236 +1,67 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  applyKoObservation,
-  calculateGuildKoTotals,
-  createInitialKoCastleState,
-  createKoCastlePublicSnapshot,
-  type KoCastleObservation,
-  type KoCastleState,
-} from "./koAttribution.js";
+import { applyKoObservation, calculateGuildKoTotals, createKoCastlePublicSnapshot, type KoCastleObservation, type KoCastleState } from "./koAttribution.js";
 
-test("confirms defenseVictim when estimated defense victim total exceeds 6", () => {
-  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
-  const second = applyKoObservation(
-    first.state,
-    createObservation({ koCount: 7, defensePartyCount: 3, attackPartyCount: 10 }),
-  );
-
-  assert.equal(second.state.defenseVictimKoTotal, 7);
-  assert.equal(second.state.attributionMode, "defenseVictim");
-});
-
-test("confirms attackVictim when estimated attack victim total exceeds 6", () => {
-  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
-  const second = applyKoObservation(
-    first.state,
-    createObservation({ koCount: 7, defensePartyCount: 10, attackPartyCount: 3 }),
-  );
-
-  assert.equal(second.state.attackVictimKoTotal, 7);
-  assert.equal(second.state.attributionMode, "attackVictim");
-});
-
-test("keeps unclear KO in unknownVictimKo without exposing it in public snapshot", () => {
-  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
-  const second = applyKoObservation(
-    first.state,
-    createObservation({ koCount: 2, defensePartyCount: 9, attackPartyCount: 9 }),
-  );
-  const snapshot = createKoCastlePublicSnapshot(second.state);
-
-  assert.equal(second.state.unknownVictimKo, 2);
-  assert.equal(second.state.attributionMode, "unknown");
-  assert.equal("unknownVictimKo" in snapshot, false);
-  assert.equal("suspiciousSwitch" in snapshot, false);
-});
-
-test("handles KO decrease by resetting mode and keeping pending unknown initial KO", () => {
-  const previousState = createState({
-    attributionMode: "defenseVictim",
-    lastKoCount: 5,
-    lastDefensePartyCount: 5,
-    lastAttackPartyCount: 10,
-    defenseVictimKoTotal: 5,
-    suspiciousSwitch: true,
-  });
-  const result = applyKoObservation(previousState, createObservation({ koCount: 2 }));
-
-  assert.equal(result.shouldPersistCastle, true);
-  assert.deepEqual(result.reasons, ["ko_decreased"]);
-  assert.equal(result.state.attributionMode, "unknown");
-  assert.equal(result.state.pendingUnknownInitialKo, 2);
-  assert.equal(result.state.suspiciousSwitch, false);
-});
-
-test("adds pendingUnknownInitialKo when the next victim side is determined", () => {
-  const previousState = createState({
-    lastKoCount: 2,
-    lastDefensePartyCount: 10,
-    lastAttackPartyCount: 10,
-    pendingUnknownInitialKo: 2,
-  });
-  const result = applyKoObservation(
-    previousState,
-    createObservation({ koCount: 4, defensePartyCount: 8, attackPartyCount: 10 }),
-  );
-
-  assert.equal(result.state.defenseVictimKoTotal, 4);
-  assert.equal(result.state.pendingUnknownInitialKo, 0);
-});
-
-test("attributes a confirmed-mode switch to the currently decreasing side", () => {
-  const previousState = createState({
-    attributionMode: "defenseVictim",
-    lastKoCount: 2,
-    lastDefensePartyCount: 10,
-    lastAttackPartyCount: 10,
-    defenseVictimKoTotal: 8,
-  });
-  const result = applyKoObservation(
-    previousState,
-    createObservation({ koCount: 3, defensePartyCount: 10, attackPartyCount: 9 }),
-  );
-
-  assert.equal(result.state.attributionMode, "unknown");
-  assert.equal(result.state.defenseVictimKoTotal, 8);
-  assert.equal(result.state.attackVictimKoTotal, 1);
-  assert.equal(result.state.suspiciousSwitch, true);
-});
-
-test("keeps victim KO totals bound to the old guild after a defender change", () => {
-  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
-  const defenderVictim = applyKoObservation(
-    first.state,
-    createObservation({ koCount: 7, defensePartyCount: 3, attackPartyCount: 10 }),
-  );
-  const changed = applyKoObservation(
-    defenderVictim.state,
-    createObservation({
-      defenderGuildId: "2002001",
-      defenderGuildName: "Former Attacker",
-      attackerGuildId: null,
-      attackerGuildName: null,
-      koCount: 7,
-      defensePartyCount: 10,
-      attackPartyCount: 0,
-    }),
-  );
-
-  const totalsAfterChange = calculateGuildKoTotals([changed.state]);
-  assert.equal(changed.shouldPersistCastle, true);
-  assert.deepEqual(changed.reasons, ["guilds_changed"]);
-  assert.equal(totalsAfterChange.get("1001001")?.totalVictimKoCount, 7);
-  assert.equal(totalsAfterChange.get("2002001"), undefined);
-
-  const nextVictim = applyKoObservation(
-    changed.state,
-    createObservation({
-      defenderGuildId: "2002001",
-      defenderGuildName: "Former Attacker",
-      attackerGuildId: null,
-      attackerGuildName: null,
-      koCount: 8,
-      defensePartyCount: 9,
-      attackPartyCount: 0,
-    }),
-  );
-  const totalsAfterNextKo = calculateGuildKoTotals([nextVictim.state]);
-  assert.equal(totalsAfterNextKo.get("1001001")?.totalVictimKoCount, 7);
-  assert.equal(totalsAfterNextKo.get("2002001")?.totalVictimKoCount, 1);
-});
-
-test("does not assign ambiguous KO increases to the previously confirmed side", () => {
-  const previousState = createState({
-    attributionMode: "defenseVictim",
-    lastKoCount: 7,
-    lastDefensePartyCount: 3,
-    lastAttackPartyCount: 10,
-    defenseVictimKoTotal: 7,
-  });
-  const result = applyKoObservation(
-    previousState,
-    createObservation({ koCount: 8, defensePartyCount: 3, attackPartyCount: 10 }),
-  );
-
-  assert.equal(result.state.defenseVictimKoTotal, 7);
-  assert.equal(result.state.attackVictimKoTotal, 0);
-  assert.equal(result.state.unknownVictimKo, 1);
-  assert.equal(calculateGuildKoTotals([result.state]).get("1001001")?.totalVictimKoCount, 7);
-});
-
-test("creates checkpoint save only for castles with KO changes and keeps max total for merge", () => {
-  const first = applyKoObservation(undefined, createObservation({ koCount: 0 }));
-  const second = applyKoObservation(
-    first.state,
-    createObservation({
-      koCount: 7,
-      defensePartyCount: 3,
-      observedAt: new Date("2026-06-10T11:45:10.000Z"),
-    }),
-  );
-  const checkpoint = applyKoObservation(
-    second.state,
-    createObservation({
-      koCount: 7,
-      defensePartyCount: 3,
-      observedAt: new Date("2026-06-10T11:45:31.000Z"),
-    }),
-  );
-  const totals = calculateGuildKoTotals([checkpoint.state]);
-
-  assert.equal(checkpoint.shouldPersistCastle, true);
-  assert.deepEqual(checkpoint.reasons, ["checkpoint_elapsed"]);
-  assert.equal(totals.get("1001001")?.totalVictimKoCount, 7);
-});
-
-test("sums victim KO by guildId across sides and castles", () => {
-  const totals = calculateGuildKoTotals([
-    createState({
-      castleId: 1,
-      defenderGuildId: "1001001",
-      defenderGuildName: "Guild A",
-      defenseVictimKoTotal: 7,
-    }),
-    createState({
-      castleId: 2,
-      attackerGuildId: "1001001",
-      attackerGuildName: "Guild A",
-      attackVictimKoTotal: 5,
-    }),
-  ]);
-
-  assert.equal(totals.size, 1);
-  assert.equal(totals.get("1001001")?.totalVictimKoCount, 12);
-});
-
-function createObservation(overrides: Partial<KoCastleObservation> = {}): KoCastleObservation {
-  return {
-    castleId: 1,
-    defenderGuildId: "1001001",
-    defenderGuildName: "Defender",
-    attackerGuildId: "2002001",
-    attackerGuildName: "Attacker",
-    defensePartyCount: 10,
-    attackPartyCount: 10,
-    koCount: 0,
-    observedAt: new Date("2026-06-10T11:45:01.000Z"),
-    ...overrides,
-  };
+function observation(koCount: number, defensePartyCount = 100, attackPartyCount = 100, overrides: Partial<KoCastleObservation> = {}): KoCastleObservation {
+  return { castleId: 1, defenderGuildId: "D", defenderGuildName: "Defender", attackerGuildId: "A", attackerGuildName: "Attacker",
+    koCount, defensePartyCount, attackPartyCount, observedAt: new Date("2026-11-04T12:00:00Z"), ...overrides };
 }
-
-function createState(overrides: Partial<KoCastleState>): KoCastleState {
-  return {
-    ...createInitialKoCastleState(1),
-    lastKoCount: 0,
-    lastDefensePartyCount: 10,
-    lastAttackPartyCount: 10,
-    defenderGuildId: "1001001",
-    defenderGuildName: "Defender",
-    attackerGuildId: "2002001",
-    attackerGuildName: "Attacker",
-    lastObservedAt: new Date("2026-06-10T11:45:01.000Z"),
-    lastUpdatedAt: new Date("2026-06-10T11:45:01.000Z"),
-    ...overrides,
-  };
+function play(...frames: KoCastleObservation[]): KoCastleState {
+  let state: KoCastleState | undefined;
+  for (const frame of frames) state = applyKoObservation(state, frame).state;
+  return state!;
 }
+test("first nonzero observation is only a baseline", () => {
+  assert.equal(calculateGuildKoTotals([play(observation(7))]).size, 0);
+});
+test("before-battle observation is not credited", () => {
+  const time = new Date("2026-11-04T11:44:59Z");
+  assert.equal(calculateGuildKoTotals([play(observation(0, 100, 100, { observedAt: time }), observation(3, 99, 100, { observedAt: time }))]).size, 0);
+});
+test("stable winner credits its increments without requiring another visible loss", () => {
+  const state = play(observation(0), observation(3, 99), observation(7, 98), observation(10, 98), observation(13, 98));
+  assert.equal(calculateGuildKoTotals([state]).get("D")?.totalVictimKoCount, 13);
+  assert.equal(createKoCastlePublicSnapshot(state).defender.koVictimCount, 13);
+});
+test("defeating the last survivor credits one KO to the other side", () => {
+  const state = play(observation(0), observation(5, 99), observation(10, 98), observation(1, 98, 99));
+  assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 10);
+  assert.equal(state.guildVictimKoTotals.A.totalVictimKoCount, 1);
+});
+test("same KO can switch repeatedly when the losing parties are visible", () => {
+  const state = play(observation(0, 100, 100, { castleId: 6 }), observation(2, 99, 100, { castleId: 6 }),
+    observation(2, 99, 99, { castleId: 6 }), observation(2, 98, 99, { castleId: 6 }));
+  assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 4);
+  assert.equal(state.guildVictimKoTotals.A.totalVictimKoCount, 2);
+});
+test("contradiction rebases without guessing or stopping subsequent credit", () => {
+  const state = play(observation(0), observation(3, 99), observation(7, 98), observation(8, 98), observation(11, 97));
+  assert.equal(state.modelMismatchCount, 1);
+  assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 10);
+});
+test("ambiguous KO does not change totals and later resolution is published once", () => {
+  const pending = play(observation(0), observation(3, 99), observation(3, 99, 99), observation(3, 99, 99));
+  assert.equal(pending.candidates.length, 2);
+  const resolved = applyKoObservation(pending, observation(6, 99, 98));
+  assert.equal(resolved.state.guildVictimKoTotals.A.totalVictimKoCount, 6);
+  assert.equal(resolved.shouldUpdateGuildTotals, true);
+  assert.equal(resolved.shouldPersistCastle, true);
+  assert.equal(applyKoObservation(resolved.state, observation(6, 99, 98)).shouldUpdateGuildTotals, false);
+});
+test("guild replacement retains old guild totals and rebases new sides", () => {
+  const state = play(observation(0), observation(3, 99), observation(7, 99, 100, { defenderGuildId: "D2" }),
+    observation(10, 98, 100, { defenderGuildId: "D2" }));
+  assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 3);
+  assert.equal(state.guildVictimKoTotals.D2.totalVictimKoCount, 3);
+  assert.equal(createKoCastlePublicSnapshot(state).defender.koVictimCount, 3);
+});
+test("a zero reset closes unresolved bounds without decreasing totals", () => {
+  const state = play(observation(0), observation(3, 99), observation(3, 99), observation(0, 99));
+  assert.deepEqual(state.closedUnresolvedKo, [0, 3]);
+  assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 3);
+});
+test("guild totals combine confirmed counts across castle and side", () => {
+  const defense = play(observation(0), observation(3, 99));
+  const attack = play(observation(0, 100, 100, { castleId: 2, attackerGuildId: "D" }), observation(4, 100, 99, { castleId: 2, attackerGuildId: "D" }));
+  assert.equal(calculateGuildKoTotals([defense, attack]).get("D")?.totalVictimKoCount, 7);
+});

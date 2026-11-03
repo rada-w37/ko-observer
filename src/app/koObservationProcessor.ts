@@ -17,7 +17,7 @@ export class KoObservationProcessor {
   private immediate = false;
   private processedCount = 0;
   private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
-    ko_increased: 0, ko_decreased: 0, checkpoint_elapsed: 0, guilds_changed: 0,
+    ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0,
     rebased: 0, before_battle: 0, initial_or_unchanged: 0,
   };
   private readonly fullGuildIds = new Map<string, string>();
@@ -61,7 +61,7 @@ export class KoObservationProcessor {
       const result = this.accumulator.observe({ castleId: message.castleId, defenderGuildId: ownerGuildId, defenderGuildName: ownerGuildName,
         attackerGuildId, attackerGuildName, defensePartyCount: message.defensePartyCount, attackPartyCount: message.attackPartyCount,
         koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt });
-      if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate = true; }
+      if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate ||= result.rebased || result.reasons.includes("guilds_changed"); }
       this.totalsDirty ||= result.shouldUpdateGuildTotals;
       for (const reason of result.reasons) this.decisionCounts[reason]++;
       if (result.rebased) this.decisionCounts.rebased++;
@@ -90,9 +90,9 @@ export class KoObservationProcessor {
   get progress(): string {
     const states = this.accumulator.exportSnapshot().castleStates;
     const attributedKo = [...this.accumulator.getGuildTotals().values()].reduce((sum, total) => sum + total.totalVictimKoCount, 0);
-    const unknownKo = states.reduce((sum, state) => sum + state.unknownVictimKo, 0);
-    const pendingInitialKo = states.reduce((sum, state) => sum + state.pendingUnknownInitialKo, 0);
-    return `processedCastles=${this.processedCount} revision=${this.accumulator.currentRevision} attributedKo=${attributedKo} unknownKo=${unknownKo} pendingInitialKo=${pendingInitialKo} decisions=${JSON.stringify(this.decisionCounts)}`;
+    const pending = states.reduce(([min, max], state) => [min + Math.min(...state.candidates.map((c) => c.min[2])), max + Math.max(...state.candidates.map((c) => c.max[2]))], [0, 0]);
+    const closed = states.reduce(([min, max], state) => [min + state.closedUnresolvedKo[0], max + state.closedUnresolvedKo[1]], [0, 0]);
+    return `processedCastles=${this.processedCount} revision=${this.accumulator.currentRevision} attributedKo=${attributedKo} pendingKo=${pending.join("..")} closedUnresolvedKo=${closed.join("..")} decisions=${JSON.stringify(this.decisionCounts)}`;
   }
 
   takePublication(updatedAt: Date) {

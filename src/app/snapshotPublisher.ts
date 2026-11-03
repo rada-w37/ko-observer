@@ -32,6 +32,7 @@ export class SnapshotPublisher {
       this.failure = new Error("Observation save timed out; outcome may be unknown.");
       throw this.failure;
     }
+    if (this.pending && this.pending.checkpoint.accumulator.revision <= this.committedRevision) this.pending = undefined;
     if (this.closed || this.task || !this.pending || this.now() < this.nextAttemptAt) return;
     const request = this.pending;
     this.pending = undefined;

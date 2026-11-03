@@ -39,9 +39,11 @@ function checkpoint(victimTotal: number, revision = 2): ObservationCheckpoint {
     defensePartyCount: 100, attackPartyCount: 100, koCount: 0, observedAt: STARTED_AT,
   };
   accumulator.observe(observation);
-  accumulator.observe({ ...observation, defensePartyCount: 100 - victimTotal, koCount: victimTotal });
+  const snapshot = accumulator.exportSnapshot();
+  snapshot.castleStates[0].defenseVictimKoTotal = victimTotal;
+  snapshot.castleStates[0].guildVictimKoTotals[DEFENDER] = { guildName: "Defender", totalVictimKoCount: victimTotal };
   return {
-    schemaVersion: 1, identity: identity(), accumulator: { ...accumulator.exportSnapshot(), revision },
+    schemaVersion: 2, identity: identity(), accumulator: { ...snapshot, revision },
     guildNames: { [DEFENDER]: "Defender", [ATTACKER]: "Attacker" }, participantGuilds: {},
     updatedAt: new Date("2026-11-02T11:45:05Z"),
   };
@@ -51,6 +53,30 @@ async function publicTotals(): Promise<Record<string, number>> {
   const snapshot = await firestore.collection("koObserverViews/guildKoTotals/guildKoTotals").get();
   return Object.fromEntries(snapshot.docs.map((document) => [document.id, document.data().totalVictimKoCount]));
 }
+
+test("v1 is preserved in the same battle and replaced only on the next battle", async () => {
+  const legacy = encodeObservationCheckpoint(checkpoint(7)) as any;
+  legacy.schemaVersion = 1;
+  for (const state of legacy.accumulator.castleStates) {
+    delete state.candidates;
+    delete state.closedUnresolvedKo;
+    delete state.modelMismatchCount;
+    Object.assign(state, { attributionMode: "defenseVictim", suspiciousSwitch: false,
+      hasKoChangeSinceLastCheckpoint: false, unknownVictimKo: 0, pendingDefenseVictimKo: 0,
+      pendingAttackVictimKo: 0, pendingUnknownInitialKo: 0 });
+  }
+  await checkpointRef.set(legacy);
+  await total(DEFENDER).set({ totalVictimKoCount: 7 });
+  const repository = new ObservationRunRepository(firestore);
+  const lease = await repository.acquire();
+  await assert.rejects(repository.resume(lease, identity(), {}, STARTED_AT), /next battle/);
+  assert.deepEqual((await checkpointRef.get()).data(), legacy);
+  assert.deepEqual(await publicTotals(), { [DEFENDER]: 7 });
+  const next = await repository.resume(lease, identity("2026-11-03"), {}, new Date("2026-11-03T11:45:01Z"));
+  assert.equal(next.checkpoint.schemaVersion, 2);
+  assert.equal(next.checkpoint.accumulator.revision, 0);
+  assert.deepEqual(await publicTotals(), {});
+});
 
 test("only the first of two concurrent owners can acquire the active lease", async () => {
   const repositories = [new ObservationRunRepository(firestore), new ObservationRunRepository(firestore)];

@@ -10,7 +10,7 @@ const scope: ActiveBattleScope = { battleType: "guildBattle", subscriptionType: 
   guildId: null, classId: null, worldGroupId: null, blockId: null };
 
 function fixture(checkpoint: ObservationCheckpoint = {
-  schemaVersion: 1, identity: createObservationIdentity("2026-11-02", "guildBattle", 1037),
+  schemaVersion: 2, identity: createObservationIdentity("2026-11-02", "guildBattle", 1037),
   accumulator: { revision: 0, castleStates: [] }, guildNames: {}, participantGuilds: {}, updatedAt: observedAt,
 }) {
   const logs: string[] = [];
@@ -27,50 +27,13 @@ function castlePayload(koCount = 0, defensePartyCount = 100, guildId = 111111111
   return bytes;
 }
 
-test("progress distinguishes attributed KO from excluded unknown KO without logging every observation", () => {
-  for (const [defense, attributed, unknown] of [[99, 1, 0], [100, 0, 1]]) {
-    const { processor, logs } = fixture();
-    processor.process(castlePayload(), observedAt);
-    processor.process(castlePayload(1, defense), observedAt);
-    assert.match(processor.progress, new RegExp(`\\battributedKo=${attributed}\\b`));
-    assert.match(processor.progress, new RegExp(`\\bunknownKo=${unknown}\\b`));
-    assert.match(processor.progress, /"ko_increased":1/);
-    assert.deepEqual(logs, []);
-  }
-});
-
-test("progress explains pending attribution, time exclusion, checkpoints and guild changes", () => {
+test("progress distinguishes a confirmed KO from pending attribution", () => {
   const { processor } = fixture();
-  processor.process(castlePayload(), new Date("2026-11-02T11:44:59Z"));
   processor.process(castlePayload(), observedAt);
-  processor.process(castlePayload(7, 93), observedAt);
-  processor.process(castlePayload(7, 93), new Date("2026-11-02T11:45:31Z"));
-  processor.process(castlePayload(2, 93), new Date("2026-11-02T11:45:32Z"));
-  assert.match(processor.progress, /pendingInitialKo=2\b/);
-  processor.process(castlePayload(3, 92), new Date("2026-11-02T11:45:33Z"));
-  processor.process(castlePayload(3, 92, 333333333), new Date("2026-11-02T11:45:34Z"));
-  assert.match(processor.progress, /attributedKo=10\b/);
-  assert.match(processor.progress, /pendingInitialKo=0\b/);
-  const decisions = JSON.parse(processor.progress.split("decisions=")[1]);
-  assert.deepEqual(decisions, { ko_increased: 2, ko_decreased: 1, checkpoint_elapsed: 2,
-    guilds_changed: 1, rebased: 0, before_battle: 1, initial_or_unchanged: 2 });
-});
-
-test("resume and reconnect report preserved totals and count each new baseline without crediting missing KO", () => {
-  const original = fixture().processor;
-  original.process(castlePayload(), observedAt);
-  original.process(castlePayload(7, 93), observedAt);
-  const { processor } = fixture(original.takePublication(observedAt).checkpoint);
-  assert.match(processor.progress, /processedCastles=0\b/);
-  assert.match(processor.progress, /attributedKo=7\b/);
-  processor.process(castlePayload(50, 50), observedAt);
-  processor.accumulator.beginObservationEpoch();
-  processor.process(castlePayload(80, 20), observedAt);
-  assert.match(processor.progress, /attributedKo=7\b/);
-  assert.match(processor.progress, /"rebased":2/);
-  assert.match(processor.progress, /"ko_increased":0/);
-  processor.process(castlePayload(81, 19), observedAt);
-  assert.match(processor.progress, /attributedKo=8\b/);
+  processor.process(castlePayload(3), observedAt);
+  assert.match(processor.progress, /attributedKo=0 pendingKo=3\.\.3/);
+  processor.process(castlePayload(6, 99), observedAt);
+  assert.match(processor.progress, /attributedKo=6 pendingKo=0\.\.0/);
 });
 
 test("invalid payload diagnostics retain parser reasons and location without raw data or partial attribution", async (context) => {

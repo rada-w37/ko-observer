@@ -18,7 +18,7 @@ export function createObservationIdentity(
 }
 
 export type ObservationCheckpoint = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   identity: ObservationIdentity;
   accumulator: KoAccumulatorSnapshot;
   guildNames: Record<string, string>;

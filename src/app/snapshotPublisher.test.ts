@@ -7,7 +7,7 @@ import { SnapshotPublisher } from "./snapshotPublisher.js";
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function checkpoint(revision: number): ObservationCheckpoint {
-  return { schemaVersion: 1, identity: createObservationIdentity("2026-11-02", "guildBattle", 123),
+  return { schemaVersion: 2, identity: createObservationIdentity("2026-11-02", "guildBattle", 123),
     accumulator: { revision, castleStates: [] }, guildNames: {}, participantGuilds: {}, updatedAt: new Date("2026-11-02T12:00:00Z") };
 }
 

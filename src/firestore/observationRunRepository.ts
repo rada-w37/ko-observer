@@ -4,7 +4,7 @@ import { Timestamp, type Firestore, type Transaction, type DocumentSnapshot } fr
 import { calculateGuildKoTotals, createKoCastlePublicSnapshot } from "../koo/koAttribution.js";
 import { getJstDateString } from "../app/date.js";
 import { ObservationOwnershipError, type ObservationLease, type ObservationIdentity, type ObservationCheckpoint, type ObservationRunStore } from "../koo/observationRun.js";
-import { encodeObservationCheckpoint, decodeObservationCheckpoint } from "./observationCheckpointCodec.js";
+import { encodeObservationCheckpoint, decodeObservationCheckpoint, decodeStoredObservationCheckpoint } from "./observationCheckpointCodec.js";
 
 export const OBSERVATION_LEASE_MS = 60_000;
 
@@ -62,8 +62,9 @@ export class ObservationRunRepository implements ObservationRunStore {
         transaction.get(this.checkpoint), transaction.get(this.meta),
         transaction.get(this.castles), transaction.get(this.totals),
       ]);
-      const previous = stored.exists ? decodeObservationCheckpoint(stored.data()) : undefined;
+      const previous = stored.exists ? decodeStoredObservationCheckpoint(stored.data()) : undefined;
       const resumed = previous?.identity.sessionId === identity.sessionId;
+      if (resumed && previous!.schemaVersion === 1) throw new Error("Switch KO attribution v2 at the next battle; existing data preserved.");
       const legacyStarted = meta.data()?.lastStartedAt;
       if (!previous && ((meta.exists && !(legacyStarted instanceof Timestamp)) ||
           (!meta.exists && (oldCastles.size > 0 || oldTotals.size > 0)))) {
@@ -72,8 +73,8 @@ export class ObservationRunRepository implements ObservationRunStore {
       if (!previous && legacyStarted instanceof Timestamp && getJstDateString(legacyStarted.toDate()) === identity.battleDate) {
         throw new Error("Legacy data exists for this battle date; switch at the next battle. Existing data preserved.");
       }
-      const checkpoint: ObservationCheckpoint = resumed ? previous! : {
-        schemaVersion: 1, identity, accumulator: { revision: 0, castleStates: [] },
+      const checkpoint: ObservationCheckpoint = resumed && previous?.schemaVersion === 2 ? previous : {
+        schemaVersion: 2, identity, accumulator: { revision: 0, castleStates: [] },
         guildNames: { ...participants }, participantGuilds: { ...participants }, updatedAt: startedAt,
       };
       for (const document of [...oldCastles.docs, ...oldTotals.docs]) transaction.delete(document.ref);

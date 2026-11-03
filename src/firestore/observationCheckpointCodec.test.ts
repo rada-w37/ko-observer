@@ -16,12 +16,14 @@ function checkpoint(): ObservationCheckpoint {
     observedAt: new Date("2026-11-02T11:45:01.123Z"),
   };
   accumulator.observe(observation);
-  accumulator.observe({ ...observation, defensePartyCount: 93, koCount: 7 });
-  accumulator.observe({ ...observation, defensePartyCount: 93, koCount: 2 });
+  accumulator.observe({ ...observation, defensePartyCount: 99, koCount: 3 });
+  accumulator.observe({ ...observation, defensePartyCount: 98, koCount: 7 });
+  accumulator.observe({ ...observation, defensePartyCount: 98, koCount: 2 });
+  accumulator.observe({ ...observation, defensePartyCount: 98, koCount: 5 });
   const snapshot = accumulator.exportSnapshot();
   snapshot.castleStates.push(createInitialKoCastleState(2));
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     identity: createObservationIdentity("2026-11-02", "guildBattle", buildGvgStreamId({
       castleId: 0, block: 0, worldGroupId: 0, gvgClass: 0, worldId: 1037,
     })),
@@ -41,7 +43,7 @@ test("checkpoint codec round-trips cumulative ledgers, pending attribution, date
   const restored = decodeObservationCheckpoint(encoded);
   assert.deepEqual(restored, original);
   assert.ok(restored.updatedAt instanceof Date);
-  assert.equal(restored.accumulator.castleStates[0].pendingUnknownInitialKo, 2);
+  assert.equal(restored.accumulator.castleStates[0].candidates.length, 2);
   assert.equal(restored.accumulator.castleStates[0].guildVictimKoTotals["111111111037"].totalVictimKoCount, 7);
   assert.equal(restored.accumulator.castleStates[1].lastKoCount, null);
 });
@@ -62,7 +64,7 @@ test("checkpoint codec does not retain mutable aliases to either caller or store
 
 test("checkpoint decoder rejects unsupported versions and corrupt state without changing the input", async (context) => {
   const corruptions: Array<[string, (stored: any) => void]> = [
-    ["unsupported version", (stored) => { stored.schemaVersion = 2; }],
+    ["unsupported version", (stored) => { stored.schemaVersion = 99; }],
     ["wrong identity digest", (stored) => { stored.identity.sessionId = "unrelated"; }],
     ["negative revision", (stored) => { stored.accumulator.revision = -1; }],
     ["fractional revision", (stored) => { stored.accumulator.revision = 1.5; }],
@@ -71,8 +73,8 @@ test("checkpoint decoder rejects unsupported versions and corrupt state without 
     ["missing raw baseline", (stored) => { delete stored.accumulator.castleStates[0].lastKoCount; }],
     ["negative victim total", (stored) => { stored.accumulator.castleStates[0].defenseVictimKoTotal = -1; }],
     ["negative ledger total", (stored) => { stored.accumulator.castleStates[0].guildVictimKoTotals["111111111037"].totalVictimKoCount = -1; }],
-    ["invalid attribution", (stored) => { stored.accumulator.castleStates[0].attributionMode = "attack"; }],
-    ["invalid flag", (stored) => { stored.accumulator.castleStates[0].suspiciousSwitch = "false"; }],
+    ["invalid attribution", (stored) => { stored.accumulator.castleStates[0].candidates[0].side = "invalid"; }],
+    ["invalid flag", (stored) => { stored.accumulator.castleStates[0].modelMismatchCount = -1; }],
     ["string date", (stored) => { stored.accumulator.castleStates[0].lastObservedAt = "2026-11-02"; }],
     ["missing checkpoint date", (stored) => { delete stored.updatedAt; }],
     ["invalid guild map", (stored) => { stored.guildNames["111111111037"] = 42; }],

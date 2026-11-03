@@ -1,5 +1,6 @@
 import {
   applyKoObservation,
+  resetKoEvidence,
   calculateGuildKoTotals,
   type KoCastleObservation,
   type KoCastleState,
@@ -38,21 +39,7 @@ export class KoAccumulator {
   observe(observation: KoCastleObservation): KoAccumulatorUpdate {
     const previousState = this.castleStates.get(observation.castleId);
     const rebased = previousState !== undefined && !this.observedCastleIds.has(observation.castleId);
-    const comparisonState = rebased
-      ? {
-          ...previousState,
-          lastKoCount: null,
-          lastDefensePartyCount: null,
-          lastAttackPartyCount: null,
-          attributionMode: "unknown" as const,
-          pendingDefenseVictimKo: 0,
-          pendingAttackVictimKo: 0,
-          pendingUnknownInitialKo: 0,
-          unknownVictimKo: previousState.unknownVictimKo + previousState.pendingUnknownInitialKo,
-          suspiciousSwitch: false,
-          hasKoChangeSinceLastCheckpoint: false,
-        }
-      : previousState;
+    const comparisonState = rebased ? resetKoEvidence(previousState!) : previousState;
     const result = applyKoObservation(comparisonState, structuredClone(observation));
     this.castleStates.set(observation.castleId, result.state);
     this.observedCastleIds.add(observation.castleId);

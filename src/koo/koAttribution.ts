@@ -1,4 +1,4 @@
-export type AttributionMode = "unknown" | "defenseVictim" | "attackVictim";
+import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate } from "./koAttributionCandidates.js";
 
 export type KoCastleObservation = {
   castleId: number;
@@ -30,25 +30,21 @@ export type KoCastlePublicSnapshot = {
 
 export type KoCastleState = {
   castleId: number;
+  candidates: KoCandidate[];
+  closedUnresolvedKo: [number, number];
+  modelMismatchCount: number;
   lastKoCount: number | null;
   lastDefensePartyCount: number | null;
   lastAttackPartyCount: number | null;
-  attributionMode: AttributionMode;
   defenseVictimKoTotal: number;
   attackVictimKoTotal: number;
-  unknownVictimKo: number;
-  pendingDefenseVictimKo: number;
-  pendingAttackVictimKo: number;
-  pendingUnknownInitialKo: number;
   lastCheckpointSlot: number | null;
-  suspiciousSwitch: boolean;
   defenderGuildId: string | null;
   defenderGuildName: string | null;
   attackerGuildId: string | null;
   attackerGuildName: string | null;
   lastObservedAt: Date | null;
   lastUpdatedAt: Date | null;
-  hasKoChangeSinceLastCheckpoint: boolean;
   guildVictimKoTotals: Record<string, GuildVictimKoTotal>;
 };
 
@@ -68,161 +64,84 @@ export type KoStateUpdateResult = {
 export type KoPersistReason =
   | "ko_decreased"
   | "ko_increased"
-  | "checkpoint_elapsed"
+  | "model_mismatch"
   | "guilds_changed";
 
-const ATTRIBUTION_CONFIRMATION_THRESHOLD = 6;
+
 const CHECKPOINT_SECONDS = 30;
 
 export function createInitialKoCastleState(castleId: number): KoCastleState {
   return {
     castleId,
+    candidates: initialKoCandidates(),
+    closedUnresolvedKo: [0, 0],
+    modelMismatchCount: 0,
     lastKoCount: null,
     lastDefensePartyCount: null,
     lastAttackPartyCount: null,
-    attributionMode: "unknown",
     defenseVictimKoTotal: 0,
     attackVictimKoTotal: 0,
-    unknownVictimKo: 0,
-    pendingDefenseVictimKo: 0,
-    pendingAttackVictimKo: 0,
-    pendingUnknownInitialKo: 0,
     lastCheckpointSlot: null,
-    suspiciousSwitch: false,
     defenderGuildId: null,
     defenderGuildName: null,
     attackerGuildId: null,
     attackerGuildName: null,
     lastObservedAt: null,
     lastUpdatedAt: null,
-    hasKoChangeSinceLastCheckpoint: false,
     guildVictimKoTotals: {},
   };
 }
 
-export function applyKoObservation(
-  previousState: KoCastleState | undefined,
-  observation: KoCastleObservation,
-): KoStateUpdateResult {
+export function resetKoEvidence(state: KoCastleState): KoCastleState {
+  const candidates = state.candidates;
+  const closed: [number, number] = candidates.length
+    ? [Math.min(...candidates.map(c => c.min[2])), Math.max(...candidates.map(c => c.max[2]))] : [0, 0];
+  return { ...state, candidates: initialKoCandidates(),
+    closedUnresolvedKo: [state.closedUnresolvedKo[0] + closed[0], state.closedUnresolvedKo[1] + closed[1]],
+    lastKoCount: null, lastDefensePartyCount: null, lastAttackPartyCount: null };
+}
+
+export function applyKoObservation(previousState: KoCastleState | undefined, observation: KoCastleObservation): KoStateUpdateResult {
   const checkpointSlot = calculateCheckpointSlot(observation.observedAt);
-  const state = previousState
-    ? {
-        ...previousState,
-        guildVictimKoTotals: { ...(previousState.guildVictimKoTotals ?? {}) },
-    }
-    : createInitialKoCastleState(observation.castleId);
-  seedLegacyGuildVictimKoTotals(state);
-  const reasons = new Set<KoPersistReason>();
-  let shouldUpdateGuildTotals = false;
-
-  const guildSidesChanged =
-    previousState !== undefined &&
-    (previousState.defenderGuildId !== observation.defenderGuildId ||
-      previousState.attackerGuildId !== observation.attackerGuildId);
-
-  if (guildSidesChanged) {
-    state.defenderGuildId = observation.defenderGuildId;
-    state.defenderGuildName = observation.defenderGuildName;
-    state.attackerGuildId = observation.attackerGuildId;
-    state.attackerGuildName = observation.attackerGuildName;
-    state.defenseVictimKoTotal = 0;
-    state.attackVictimKoTotal = 0;
-    state.attributionMode = "unknown";
-    state.pendingDefenseVictimKo = 0;
-    state.pendingAttackVictimKo = 0;
-    state.pendingUnknownInitialKo = 0;
-    state.suspiciousSwitch = false;
-    state.lastObservedAt = observation.observedAt;
-    state.lastUpdatedAt = observation.observedAt;
-    state.lastCheckpointSlot = checkpointSlot;
-    state.hasKoChangeSinceLastCheckpoint = false;
-    updateLastRawCounts(state, observation);
-    return {
-      state,
-      shouldPersistCastle: true,
-      shouldUpdateGuildTotals: false,
-      checkpointSlot,
-      reasons: ["guilds_changed"],
-    };
+  let state = previousState ? structuredClone(previousState) : createInitialKoCastleState(observation.castleId);
+  const changed = previousState !== undefined && (state.defenderGuildId !== observation.defenderGuildId || state.attackerGuildId !== observation.attackerGuildId);
+  const reasons: KoPersistReason[] = [];
+  if (changed) {
+    state = resetKoEvidence(state);
+    state.defenseVictimKoTotal = 0; state.attackVictimKoTotal = 0;
+    reasons.push("guilds_changed");
   }
-
-  state.defenderGuildId = observation.defenderGuildId;
-  state.defenderGuildName = observation.defenderGuildName;
-  state.attackerGuildId = observation.attackerGuildId;
-  state.attackerGuildName = observation.attackerGuildName;
+  state.defenderGuildId = observation.defenderGuildId; state.defenderGuildName = observation.defenderGuildName;
+  state.attackerGuildId = observation.attackerGuildId; state.attackerGuildName = observation.attackerGuildName;
+  let defenseCredit = 0, attackCredit = 0;
+  if (checkpointSlot !== null && state.lastKoCount !== null && state.lastDefensePartyCount !== null && state.lastAttackPartyCount !== null) {
+    const previousKo = state.lastKoCount;
+    if (observation.koCount === 0) state = resetKoEvidence(state);
+    else {
+      const result = advanceKoCandidates(state.candidates,
+        { ko: state.lastKoCount, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount },
+        { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount }, minimumFreshPartySize(observation.castleId));
+      if (!result.candidates.length) { state = resetKoEvidence(state); state.modelMismatchCount++; reasons.push("model_mismatch"); }
+      else {
+        state.candidates = result.candidates;
+        defenseCredit = observation.defenderGuildId ? result.defenseCredit : 0;
+        attackCredit = observation.attackerGuildId ? result.attackCredit : 0;
+        const unassigned = result.defenseCredit + result.attackCredit - defenseCredit - attackCredit;
+        state.closedUnresolvedKo = [state.closedUnresolvedKo[0] + unassigned, state.closedUnresolvedKo[1] + unassigned];
+        state.defenseVictimKoTotal += defenseCredit; state.attackVictimKoTotal += attackCredit;
+        recordGuildVictimKo(state, observation.defenderGuildId, observation.defenderGuildName, defenseCredit);
+        recordGuildVictimKo(state, observation.attackerGuildId, observation.attackerGuildName, attackCredit);
+      }
+    }
+    if (observation.koCount > previousKo) reasons.push("ko_increased");
+    if (observation.koCount < previousKo) reasons.push("ko_decreased");
+  }
   state.lastObservedAt = observation.observedAt;
-
-  if (checkpointSlot === null) {
-    updateLastRawCounts(state, observation);
-    return {
-      state,
-      shouldPersistCastle: false,
-      shouldUpdateGuildTotals: false,
-      checkpointSlot: null,
-      reasons: [],
-    };
-  }
-
-  if (
-    state.lastKoCount === null ||
-    state.lastDefensePartyCount === null ||
-    state.lastAttackPartyCount === null
-  ) {
-    updateLastRawCounts(state, observation);
-    state.lastCheckpointSlot = checkpointSlot;
-    state.lastUpdatedAt = observation.observedAt;
-    return {
-      state,
-      shouldPersistCastle: false,
-      shouldUpdateGuildTotals: false,
-      checkpointSlot,
-      reasons: [],
-    };
-  }
-
-  const koDelta = observation.koCount - state.lastKoCount;
-  const defenseDelta = observation.defensePartyCount - state.lastDefensePartyCount;
-  const attackDelta = observation.attackPartyCount - state.lastAttackPartyCount;
-
-  if (koDelta > 0) {
-    state.lastUpdatedAt = observation.observedAt;
-    applyKoIncrease(state, koDelta, defenseDelta, attackDelta);
-    state.hasKoChangeSinceLastCheckpoint = true;
-    reasons.add("ko_increased");
-    shouldUpdateGuildTotals = true;
-  } else if (koDelta < 0) {
-    if (state.pendingUnknownInitialKo > 0) {
-      state.unknownVictimKo += state.pendingUnknownInitialKo;
-    }
-    state.attributionMode = "unknown";
-    state.pendingDefenseVictimKo = 0;
-    state.pendingAttackVictimKo = 0;
-    state.pendingUnknownInitialKo = observation.koCount > 0 ? observation.koCount : 0;
-    state.suspiciousSwitch = false;
-    state.hasKoChangeSinceLastCheckpoint = false;
-    state.lastUpdatedAt = observation.observedAt;
-    reasons.add("ko_decreased");
-    shouldUpdateGuildTotals = true;
-  }
-
-  const checkpointElapsed =
-    checkpointSlot !== state.lastCheckpointSlot && state.hasKoChangeSinceLastCheckpoint;
-  if (checkpointElapsed) {
-    state.lastCheckpointSlot = checkpointSlot;
-    state.hasKoChangeSinceLastCheckpoint = false;
-    state.lastUpdatedAt = observation.observedAt;
-    reasons.add("checkpoint_elapsed");
-  }
-
+  state.lastUpdatedAt = observation.observedAt;
+  state.lastCheckpointSlot = checkpointSlot;
   updateLastRawCounts(state, observation);
-
-  return {
-    state,
-    shouldPersistCastle: reasons.has("ko_decreased") || reasons.has("checkpoint_elapsed"),
-    shouldUpdateGuildTotals,
-    checkpointSlot,
-    reasons: [...reasons],
-  };
+  return { state, shouldPersistCastle: changed || defenseCredit + attackCredit > 0 || reasons.length > 0,
+    shouldUpdateGuildTotals: defenseCredit + attackCredit > 0, checkpointSlot, reasons };
 }
 
 export function createKoCastlePublicSnapshot(state: KoCastleState): KoCastlePublicSnapshot {
@@ -258,40 +177,9 @@ export function calculateGuildKoTotals(
   >();
 
   for (const state of states) {
-    const guildVictimKoTotals = state.guildVictimKoTotals ?? {};
-    const ledgerGuildIds = Object.keys(guildVictimKoTotals);
-    if (ledgerGuildIds.length > 0) {
-      for (const guildId of ledgerGuildIds) {
-        const guildTotal = guildVictimKoTotals[guildId];
-        if (!guildTotal) {
-          continue;
-        }
-        addGuildKoTotal(
-          totals,
-          guildId,
-          guildTotal.guildName,
-          guildTotal.totalVictimKoCount,
-          state,
-        );
-      }
-      continue;
+    for (const [guildId, entry] of Object.entries(state.guildVictimKoTotals)) {
+      addGuildKoTotal(totals, guildId, entry.guildName, entry.totalVictimKoCount, state);
     }
-
-    // Keep compatibility with hand-built states used by older callers/tests.
-    addGuildKoTotal(
-      totals,
-      state.defenderGuildId,
-      state.defenderGuildName,
-      state.defenseVictimKoTotal,
-      state,
-    );
-    addGuildKoTotal(
-      totals,
-      state.attackerGuildId,
-      state.attackerGuildName,
-      state.attackVictimKoTotal,
-      state,
-    );
   }
 
   return totals;
@@ -316,59 +204,6 @@ export function calculateCheckpointSlot(observedAt: Date): number | null {
   return Math.floor(elapsedMilliseconds / (CHECKPOINT_SECONDS * 1000));
 }
 
-function applyKoIncrease(
-  state: KoCastleState,
-  koDelta: number,
-  defenseDelta: number,
-  attackDelta: number,
-): void {
-  if (defenseDelta < 0 && attackDelta >= 0) {
-    const attributedKo = consumePendingUnknownInitialKo(state) + koDelta;
-    state.defenseVictimKoTotal += attributedKo;
-    state.pendingDefenseVictimKo += attributedKo;
-    state.pendingAttackVictimKo = 0;
-    if (state.attributionMode === "attackVictim") {
-      state.suspiciousSwitch = true;
-    }
-    if (state.defenseVictimKoTotal > ATTRIBUTION_CONFIRMATION_THRESHOLD) {
-      state.attributionMode = "defenseVictim";
-    } else {
-      state.attributionMode = "unknown";
-    }
-    recordGuildVictimKo(
-      state,
-      state.defenderGuildId,
-      state.defenderGuildName,
-      attributedKo,
-    );
-    return;
-  }
-
-  if (attackDelta < 0 && defenseDelta >= 0) {
-    const attributedKo = consumePendingUnknownInitialKo(state) + koDelta;
-    state.attackVictimKoTotal += attributedKo;
-    state.pendingAttackVictimKo += attributedKo;
-    state.pendingDefenseVictimKo = 0;
-    if (state.attributionMode === "defenseVictim") {
-      state.suspiciousSwitch = true;
-    }
-    if (state.attackVictimKoTotal > ATTRIBUTION_CONFIRMATION_THRESHOLD) {
-      state.attributionMode = "attackVictim";
-    } else {
-      state.attributionMode = "unknown";
-    }
-    recordGuildVictimKo(
-      state,
-      state.attackerGuildId,
-      state.attackerGuildName,
-      attributedKo,
-    );
-    return;
-  }
-
-  state.unknownVictimKo += consumePendingUnknownInitialKo(state) + koDelta;
-}
-
 function recordGuildVictimKo(
   state: KoCastleState,
   guildId: string | null,
@@ -384,31 +219,6 @@ function recordGuildVictimKo(
     guildName: existingTotal?.guildName ?? guildName,
     totalVictimKoCount: (existingTotal?.totalVictimKoCount ?? 0) + koCount,
   };
-}
-
-function seedLegacyGuildVictimKoTotals(state: KoCastleState): void {
-  if (Object.keys(state.guildVictimKoTotals).length > 0) {
-    return;
-  }
-
-  recordGuildVictimKo(
-    state,
-    state.defenderGuildId,
-    state.defenderGuildName,
-    state.defenseVictimKoTotal,
-  );
-  recordGuildVictimKo(
-    state,
-    state.attackerGuildId,
-    state.attackerGuildName,
-    state.attackVictimKoTotal,
-  );
-}
-
-function consumePendingUnknownInitialKo(state: KoCastleState): number {
-  const pendingUnknownInitialKo = state.pendingUnknownInitialKo;
-  state.pendingUnknownInitialKo = 0;
-  return pendingUnknownInitialKo;
 }
 
 function updateLastRawCounts(state: KoCastleState, observation: KoCastleObservation): void {

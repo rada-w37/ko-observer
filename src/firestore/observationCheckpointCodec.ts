@@ -1,19 +1,28 @@
 import { Timestamp } from "firebase-admin/firestore";
-import { createObservationIdentity, type ObservationCheckpoint } from "../koo/observationRun.js";
+import { createObservationIdentity, type ObservationCheckpoint, type ObservationIdentity } from "../koo/observationRun.js";
 
 const nullableDates = ["lastObservedAt", "lastUpdatedAt"];
 const nullableCounts = ["lastKoCount", "lastDefensePartyCount", "lastAttackPartyCount", "lastCheckpointSlot"];
-const counts = ["defenseVictimKoTotal", "attackVictimKoTotal", "unknownVictimKo", "pendingDefenseVictimKo", "pendingAttackVictimKo", "pendingUnknownInitialKo"];
+const counts = ["defenseVictimKoTotal", "attackVictimKoTotal"];
+const legacyCounts = ["unknownVictimKo", "pendingDefenseVictimKo", "pendingAttackVictimKo", "pendingUnknownInitialKo"];
 const nullableNames = ["defenderGuildId", "defenderGuildName", "attackerGuildId", "attackerGuildName"];
 
 export function encodeObservationCheckpoint(checkpoint: ObservationCheckpoint): Record<string, unknown> {
   validate(checkpoint);
+  if (checkpoint.schemaVersion !== 2) throw new Error("Only checkpoint v2 can be written.");
   return transform(checkpoint, true) as Record<string, unknown>;
 }
 
 export function decodeObservationCheckpoint(stored: unknown): ObservationCheckpoint {
+  const checkpoint = decodeStoredObservationCheckpoint(stored);
+  if (checkpoint.schemaVersion !== 2) invalid();
+  return checkpoint;
+}
+
+export function decodeStoredObservationCheckpoint(stored: unknown): ObservationCheckpoint | { schemaVersion: 1; identity: ObservationIdentity } {
   const checkpoint = transform(stored, false);
   validate(checkpoint);
+  if (checkpoint.schemaVersion === 1) return { schemaVersion: 1, identity: checkpoint.identity };
   return checkpoint as ObservationCheckpoint;
 }
 
@@ -39,8 +48,8 @@ function date(input: unknown): boolean {
   return input instanceof Date && Number.isFinite(input.getTime());
 }
 
-function validate(input: unknown): asserts input is ObservationCheckpoint {
-  if (!record(input) || input.schemaVersion !== 1 || !record(input.identity) || !record(input.accumulator)) invalid();
+function validate(input: unknown): asserts input is Record<string, any> {
+  if (!record(input) || ![1, 2].includes(input.schemaVersion) || !record(input.identity) || !record(input.accumulator)) invalid();
   const identity = input.identity;
   if (typeof identity.battleDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(identity.battleDate) ||
       !Number.isFinite(Date.parse(`${identity.battleDate}T00:00:00Z`)) ||
@@ -59,8 +68,22 @@ function validate(input: unknown): asserts input is ObservationCheckpoint {
     if (counts.some((key) => !count(state[key])) || nullableCounts.some((key) => state[key] !== null && !count(state[key]))) invalid();
     if (nullableDates.some((key) => state[key] !== null && !date(state[key]))) invalid();
     if (nullableNames.some((key) => state[key] !== null && typeof state[key] !== "string")) invalid();
-    if (!["unknown", "defenseVictim", "attackVictim"].includes(state.attributionMode) ||
-        typeof state.suspiciousSwitch !== "boolean" || typeof state.hasKoChangeSinceLastCheckpoint !== "boolean" || !record(state.guildVictimKoTotals)) invalid();
+    if (!record(state.guildVictimKoTotals)) invalid();
+    if (input.schemaVersion === 1 && (legacyCounts.some((key) => !count(state[key])) ||
+        !["unknown", "defenseVictim", "attackVictim"].includes(state.attributionMode) ||
+        typeof state.suspiciousSwitch !== "boolean" || typeof state.hasKoChangeSinceLastCheckpoint !== "boolean")) invalid();
+    if (input.schemaVersion === 2) {
+      if (!Array.isArray(state.candidates) || state.candidates.length < 1 || state.candidates.length > 2 ||
+          new Set(state.candidates.map((c: any) => c?.side)).size !== state.candidates.length ||
+          !Array.isArray(state.closedUnresolvedKo) || state.closedUnresolvedKo.length !== 2 ||
+          !state.closedUnresolvedKo.every(count) || state.closedUnresolvedKo[0] > state.closedUnresolvedKo[1] || !count(state.modelMismatchCount)) invalid();
+      for (const candidate of state.candidates) {
+        if (!record(candidate) || !["defense", "attack"].includes(candidate.side) ||
+            !Array.isArray(candidate.min) || !Array.isArray(candidate.max) || candidate.min.length !== 3 || candidate.max.length !== 3 ||
+            !candidate.min.every(count) || !candidate.max.every(count) || candidate.min.some((n: number, i: number) => n > candidate.max[i]) ||
+            candidate.min[0] + candidate.min[1] > candidate.min[2] || candidate.max[2] > candidate.max[0] + candidate.max[1]) invalid();
+      }
+    }
     for (const total of Object.values(state.guildVictimKoTotals)) {
       if (!record(total) || !count(total.totalVictimKoCount) || (total.guildName !== null && typeof total.guildName !== "string")) invalid();
     }

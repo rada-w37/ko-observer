@@ -17,10 +17,10 @@ class MemoryStore implements ObservationRunStore {
   async acquire() { return { ownerId: "test", fenceToken: 1, validUntil: 60_000 }; }
   async renew(lease: ObservationLease) { if (this.renewFailure) throw this.renewFailure; return lease; }
   async resume(_lease: ObservationLease, identity: ObservationIdentity, participants: Record<string, string>, startedAt: Date) {
-    this.saved ??= { schemaVersion: 1, identity, accumulator: { revision: 0, castleStates: [] }, guildNames: {}, participantGuilds: participants, updatedAt: startedAt };
+    this.saved ??= { schemaVersion: 2, identity, accumulator: { revision: 0, castleStates: [] }, guildNames: {}, participantGuilds: participants, updatedAt: startedAt };
     return { checkpoint: structuredClone(this.saved), resumed: false };
   }
-  async commit(_lease: ObservationLease, checkpoint: ObservationCheckpoint) {
+  async commit(_lease: ObservationLease, checkpoint: ObservationCheckpoint, _castleIds?: number[], _publishTotals?: boolean) {
     this.writes.push(checkpoint.accumulator.revision);
     if (this.writes.length === 1) await this.gate;
     this.saved = structuredClone(checkpoint);
@@ -33,26 +33,26 @@ class Client {
   connected = 0;
   closed = 0;
   addEventListener(listener: GvgRealtimeClientListener) { this.listener = listener; return () => { this.listener = undefined; }; }
-  async connect() { this.connected++; this.send(0); this.send(1); }
+  async connect() { this.connected++; this.send(0); this.send(3); }
   disconnect() { this.closed++; }
   send(ko: number) {
     const bytes = new Uint8Array(24); const view = new DataView(bytes.buffer);
     view.setUint32(0, 1, true); view.setUint32(4, 111111111, true); view.setUint32(8, 222222222, true);
-    view.setUint16(16, 100 - ko, true); view.setUint16(18, 100, true); view.setUint8(20, 1); view.setUint16(22, ko, true);
+    view.setUint16(16, 100 - ko / 3, true); view.setUint16(18, 100, true); view.setUint8(20, 1); view.setUint16(22, ko, true);
     this.listener?.({ type: "payloadReceived", payload: bytes });
   }
 }
 
-function fixture(store = new MemoryStore(), duringSleep: (clock: number, client: Client) => void = () => {}, signal?: AbortSignal) {
+function fixture(store = new MemoryStore(), duringSleep: (clock: number, client: Client) => void = () => {}, signal?: AbortSignal, durationMs = 500, publishIntervalMs = 100) {
   let clock = 0;
   const client = new Client(); const logs: string[] = [];
   const runtime = new ObservationRuntime({
     scope: { battleType: "guildBattle", subscriptionType: "guildBattle", worldId: "1037", guildId: null, classId: null, worldGroupId: null, blockId: null },
-    payload: createGuildBattleSubscriptionPayload("1037"), store, notifications: new NoopNotificationCoordinator(), runId: "test", durationMs: 500,
+    payload: createGuildBattleSubscriptionPayload("1037"), store, notifications: new NoopNotificationCoordinator(), runId: "test", durationMs,
     createClient: () => client as unknown as GvgRealtimeClient,
     monotonicNow: () => clock, now: () => new Date(Date.parse("2026-11-02T12:00:00Z") + clock),
     sleep: async (ms) => { clock += ms; duringSleep(clock, client); }, signal,
-    policy: { ...observationPolicy, publishIntervalMs: 100, renewIntervalMs: 100, progressIntervalMs: 50, shutdownTimeoutMs: 100 },
+    policy: { ...observationPolicy, publishIntervalMs, renewIntervalMs: 100, progressIntervalMs: 50, shutdownTimeoutMs: 100 },
     log: (message) => logs.push(message),
   });
   return { runtime, store, client, logs };
@@ -63,14 +63,14 @@ test("receiving and attribution continue while a save is pending; latest total i
   let release!: () => void;
   store.gate = new Promise<void>((resolve) => { release = resolve; });
   const { runtime, client, logs } = fixture(store, (clock, source) => {
-    if (clock === 200) source.send(2);
-    if (clock === 250) source.send(3);
+    if (clock === 200) source.send(6);
+    if (clock === 250) source.send(9);
     if (clock === 300) { assert.deepEqual(store.writes, [2]); release(); }
   });
   await runtime.run();
   assert.ok(logs.some((line) => line.includes("revision=4") && line.includes("committedRevision=0")));
-  assert.ok(logs.some((line) => line.includes("summary") && line.includes("attributedKo=3") && line.includes("unknownKo=0")));
-  assert.equal(calculateGuildKoTotals(store.saved!.accumulator.castleStates).get("111111111037")?.totalVictimKoCount, 3);
+  assert.ok(logs.some((line) => line.includes("summary") && line.includes("attributedKo=9") && line.includes("pendingKo=0..0")));
+  assert.equal(calculateGuildKoTotals(store.saved!.accumulator.castleStates).get("111111111037")?.totalVictimKoCount, 9);
   assert.equal(store.saved!.accumulator.revision, 4);
   assert.equal(client.closed, 1); assert.equal(store.releases, 1);
 });
@@ -89,7 +89,7 @@ test("cancellation stops ingress and still flushes already processed observation
   const { runtime, client, store } = fixture(new MemoryStore(), (clock) => { if (clock === 150) controller.abort(); }, controller.signal);
   await assert.rejects(runtime.run(), /cancelled/);
   assert.equal(client.closed, 1);
-  assert.equal(calculateGuildKoTotals(store.saved!.accumulator.castleStates).get("111111111037")?.totalVictimKoCount, 1);
+  assert.equal(calculateGuildKoTotals(store.saved!.accumulator.castleStates).get("111111111037")?.totalVictimKoCount, 3);
 });
 
 test("already-cancelled startup never acquires ownership or opens a socket", async () => {
@@ -148,4 +148,28 @@ test("final save failure is logged separately while preserving the cancellation 
   assert.ok(cleanupLog?.includes("final save rejected"));
   assert.ok(cleanupLog?.includes('"code":7'));
   assert.ok(logs.some((line) => line.includes("outcome=failed")));
+});
+
+
+test("confirmed changes reach both public projections in the next five-second save", async () => {
+  const store = new MemoryStore();
+  let time = 0;
+  const saves: Array<{ time: number; total: number; castles?: number[]; publishTotals?: boolean }> = [];
+  const commit = store.commit.bind(store);
+  store.commit = async (lease, checkpoint, castles, publishTotals) => {
+    saves.push({ time, total: checkpoint.accumulator.castleStates[0].defenseVictimKoTotal, castles, publishTotals });
+    await commit(lease, checkpoint, castles, publishTotals);
+  };
+  const { runtime } = fixture(store, (clock, client) => {
+    time = clock;
+    if (clock === 1000) client.send(6);
+    if (clock === 2000) client.send(9);
+    if (clock === 6000) client.send(12);
+  }, undefined, 10100, 5000);
+  await runtime.run();
+  assert.deepEqual(saves.map(({ total, castles, publishTotals }) => ({ total, castles, publishTotals })), [
+    { total: 9, castles: [1], publishTotals: true }, { total: 12, castles: [1], publishTotals: true },
+  ]);
+  assert.ok(saves[0].time >= 5000 && saves[0].time <= 5050);
+  assert.ok(saves[1].time >= 10000 && saves[1].time <= 10050);
 });
