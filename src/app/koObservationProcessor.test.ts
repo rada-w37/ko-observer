@@ -38,6 +38,20 @@ test("progress distinguishes a confirmed KO from pending attribution", () => {
   assert.match(processor.progress, /attributedKo=6 pendingKo=0\.\.0/);
 });
 
+test("reconnect makes closed evidence publishable without another observation of the castle", () => {
+  const { processor } = fixture();
+  processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(3), observedAt);
+  const before = processor.takePublication(observedAt);
+  processor.beginObservationEpoch();
+  const after = processor.takePublication(observedAt);
+  assert.equal(after.checkpoint.accumulator.revision, before.checkpoint.accumulator.revision + 1);
+  assert.deepEqual(after.checkpoint.accumulator.castleStates[0].closedUnresolvedKo, [3, 3]);
+  assert.match(processor.progress, /pendingKo=0\.\.0 closedUnresolvedKo=3\.\.3/);
+  assert.deepEqual(after.castleIds, []);
+  assert.equal(after.publishTotals, false);
+});
+
 test("publication logs input, viable transitions and confirmed credit in bounded batches", () => {
   const { processor, logs } = fixture();
   processor.process(castlePayload(), observedAt);

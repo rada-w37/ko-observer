@@ -32,6 +32,14 @@ export class KoAccumulator {
 
   beginObservationEpoch(): void {
     this.observedCastleIds.clear();
+    let reset = false;
+    for (const [castleId, state] of this.castleStates) {
+      const hasBaseline = state.lastKoCount !== null || state.lastDefensePartyCount !== null || state.lastAttackPartyCount !== null;
+      if (!hasBaseline && !state.candidates.some((candidate) => candidate.max[2] > 0)) continue;
+      this.castleStates.set(castleId, resetKoEvidence(state));
+      reset = true;
+    }
+    if (reset) this.revision += 1;
   }
 
   get currentRevision(): number { return this.revision; }

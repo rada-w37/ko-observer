@@ -25,13 +25,24 @@ test("ownership changes during a gap do not move old totals", () => {
   assert.equal(accumulator.getGuildTotals().get("D")?.totalVictimKoCount, 3);
   assert.equal(accumulator.getGuildTotals().get("NEW")?.totalVictimKoCount, 3);
 });
-test("unresolved evidence is closed at the next epoch baseline", () => {
+test("the next epoch closes unresolved evidence before any castle is observed", () => {
   const accumulator = new KoAccumulator();
   accumulator.observe(frame(0)); accumulator.observe(frame(3));
+  accumulator.observe(frame(0, 100, 2)); accumulator.observe(frame(3, 99, 2));
+  const revision = accumulator.currentRevision;
   accumulator.beginObservationEpoch();
+  assert.equal(accumulator.currentRevision, revision + 1);
+  const unseen = accumulator.exportSnapshot().castleStates[0];
+  assert.deepEqual(unseen.closedUnresolvedKo, [3, 3]);
+  assert.equal(unseen.lastKoCount, null);
+  assert.ok(unseen.candidates.every((candidate) => candidate.max[2] === 0));
+  accumulator.beginObservationEpoch();
+  assert.equal(accumulator.currentRevision, revision + 1);
+  accumulator.observe(frame(50, 80, 2));
+  assert.deepEqual(accumulator.exportSnapshot().castleStates[0], unseen);
   const result = accumulator.observe(frame(50, 80));
   assert.deepEqual(result.state.closedUnresolvedKo, [3, 3]);
-  assert.equal(accumulator.getGuildTotals().size, 0);
+  assert.equal(accumulator.getGuildTotals().get("D")?.totalVictimKoCount, 3);
 });
 test("snapshot restore holds totals without charging the missed interval", () => {
   const accumulator = new KoAccumulator();
