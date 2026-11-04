@@ -123,6 +123,40 @@ test("publication logs input, viable transitions and confirmed credit in bounded
   assert.equal(logs.length, 1);
 });
 
+test("repeated counterattack frames are counted separately from omitted details", () => {
+  const { processor, logs } = fixture();
+  processor.process(castlePayload(0, 100, 111111111, GVG_CASTLE_STATE.activeDeclared, 2), beforeBattle);
+  processor.process(castlePayload(1, 100, 111111111, GVG_CASTLE_STATE.activeCounterattack), observedAt);
+  const unchanged = castlePayload(2, 99, 111111111, GVG_CASTLE_STATE.activeCounterattack);
+  processor.process(unchanged, observedAt);
+  for (let i = 0; i < 128; i++) processor.process(unchanged, observedAt);
+  processor.process(castlePayload(3, 99, 111111111, GVG_CASTLE_STATE.activeDeclared, 2), observedAt);
+  processor.takePublication(observedAt);
+  assert.match(logs[0], /omitted=0 omittedPriority=0 coalescedBoundary=128/);
+  const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
+  assert.equal(decisions.length, 3);
+  assert.deepEqual(decisions[1].previous, { ko: 1, defense: 100, attack: 100 });
+  assert.deepEqual(decisions[1].current, { ko: 2, defense: 99, attack: 100 });
+  assert.equal(decisions[2].castleId, 2);
+  assert.equal(decisions[2].defenseCredit, 3);
+  processor.process(unchanged, observedAt);
+  processor.takePublication(observedAt);
+  assert.match(logs[1], /coalescedBoundary=1 decisions=\[\]/);
+});
+
+test("a confirmed KO replaces a lower-priority detail in a full batch", () => {
+  const { processor, logs } = fixture();
+  processor.process(castlePayload(0, 100, 111111111, GVG_CASTLE_STATE.activeDeclared, 2), beforeBattle);
+  for (let i = 0; i < 128; i++) processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(3, 99, 111111111, GVG_CASTLE_STATE.activeDeclared, 2), observedAt);
+  processor.takePublication(observedAt);
+  assert.match(logs[0], /omitted=1 omittedPriority=0 coalescedBoundary=0/);
+  const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
+  assert.equal(decisions.length, 128);
+  assert.equal(decisions.at(-1).castleId, 2);
+  assert.equal(decisions.at(-1).defenseCredit, 3);
+});
+
 test("unverified placement rules leave small KO increments as candidates", () => {
   const { processor, logs } = fixture(undefined, { ...scope, worldId: "1108" });
   processor.process(castlePayload(7), observedAt);

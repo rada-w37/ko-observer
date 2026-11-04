@@ -14,6 +14,8 @@ export type ActiveBattleScope = Exclude<BattleSubscriptionScope, { subscriptionT
 const MAX_DIAGNOSTIC_DECISIONS = 128;
 const LAST_CONFIRMED_PLACEMENT_WORLD_ID = 1107;
 
+type DiagnosticDecision = { priority: boolean; details: Record<string, unknown> };
+
 function unverifiedBattleBoundary(phase: number | undefined): KoObservationBoundary | undefined {
   if (phase === GVG_CASTLE_STATE.activeBattle) return "fallen_baseline";
   if (phase === GVG_CASTLE_STATE.activeCounterattack || phase === GVG_CASTLE_STATE.activeCounterattackSuccessful) return "counterattack_baseline";
@@ -27,8 +29,10 @@ export class KoObservationProcessor {
   private totalsDirty = false;
   private immediate = false;
   private processedCount = 0;
-  private readonly diagnosticDecisions: Array<Record<string, unknown>> = [];
+  private readonly diagnosticDecisions: DiagnosticDecision[] = [];
   private omittedDecisions = 0;
+  private omittedPriorityDecisions = 0;
+  private coalescedBoundaryFrames = 0;
   private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
     ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0, counterattack_baseline: 0, fallen_baseline: 0,
     rebased: 0, before_battle: 0, initial_or_unchanged: 0,
@@ -83,11 +87,12 @@ export class KoObservationProcessor {
       const previousPhase = this.castlePhases.get(message.castleId);
       const phase = message.gvgCastleState;
       const placementMinimum = this.placementMinimumConfirmed ? minimumFreshPartySize(message.castleId) : null;
+      const boundary = unverifiedBattleBoundary(phase) ?? unverifiedBattleBoundary(previousPhase);
       const result = this.accumulator.observe({ castleId: message.castleId, defenderGuildId: ownerGuildId, defenderGuildName: ownerGuildName,
         attackerGuildId, attackerGuildName, defensePartyCount: message.defensePartyCount, attackPartyCount: message.attackPartyCount,
         koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt,
         normalBattlePhase: phase === GVG_CASTLE_STATE.activeDeclared,
-        boundary: unverifiedBattleBoundary(phase) ?? unverifiedBattleBoundary(previousPhase),
+        boundary,
         freshPartyKoLowerBound: placementMinimum ?? 1 });
       this.castlePhases.set(message.castleId, phase);
       if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate ||= result.rebased || result.reasons.includes("guilds_changed"); }
@@ -95,12 +100,20 @@ export class KoObservationProcessor {
       for (const reason of result.reasons) this.decisionCounts[reason]++;
       if (result.rebased) this.decisionCounts.rebased++;
       if (result.checkpointSlot !== null && result.decision.transitions.some((transition) => transition !== "no_battle")) {
-        if (this.diagnosticDecisions.length >= MAX_DIAGNOSTIC_DECISIONS) this.omittedDecisions++;
-        else this.diagnosticDecisions.push({ castleId: message.castleId, castleKind: battleCastleKind(message.castleId),
-          minimumFreshPartySize: placementMinimum, freshPartyKoLowerBound: placementMinimum ?? 1,
-          previousPhase, phase, observedAt: receivedAt.toISOString(),
-          defenderGuildId: ownerGuildId, attackerGuildId, rebased: result.rebased, reasons: result.reasons,
-          ...result.decision, candidates: result.state.candidates });
+        const { previous, current } = result.decision;
+        const guildsChanged = result.reasons.includes("guilds_changed");
+        const boundaryChanged = boundary !== undefined && previousPhase !== phase;
+        if (boundary && !boundaryChanged && !guildsChanged && !result.rebased &&
+            previous?.ko === current.ko && previous.defense === current.defense && previous.attack === current.attack) {
+          this.coalescedBoundaryFrames++;
+        } else {
+          const priority = result.shouldUpdateGuildTotals || result.rebased || guildsChanged || boundaryChanged || result.reasons.includes("model_mismatch");
+          this.recordDiagnostic(priority, { castleId: message.castleId, castleKind: battleCastleKind(message.castleId),
+            minimumFreshPartySize: placementMinimum, freshPartyKoLowerBound: placementMinimum ?? 1,
+            previousPhase, phase, observedAt: receivedAt.toISOString(),
+            defenderGuildId: ownerGuildId, attackerGuildId, rebased: result.rebased, reasons: result.reasons,
+            ...result.decision, candidates: result.state.candidates });
+        }
       }
       if (result.checkpointSlot === null) this.decisionCounts.before_battle++;
       else if (!result.rebased && result.reasons.length === 0) this.decisionCounts.initial_or_unchanged++;
@@ -133,10 +146,13 @@ export class KoObservationProcessor {
   }
 
   takePublication(updatedAt: Date) {
-    if (this.diagnosticDecisions.length) {
-      this.warn(`KO attribution revision=${this.accumulator.currentRevision} omitted=${this.omittedDecisions} decisions=${JSON.stringify(this.diagnosticDecisions)}`);
+    if (this.diagnosticDecisions.length || this.coalescedBoundaryFrames) {
+      const details = this.diagnosticDecisions.map((entry) => entry.details);
+      this.warn(`KO attribution revision=${this.accumulator.currentRevision} omitted=${this.omittedDecisions} omittedPriority=${this.omittedPriorityDecisions} coalescedBoundary=${this.coalescedBoundaryFrames} decisions=${JSON.stringify(details)}`);
       this.diagnosticDecisions.length = 0;
       this.omittedDecisions = 0;
+      this.omittedPriorityDecisions = 0;
+      this.coalescedBoundaryFrames = 0;
     }
     const publication = {
       checkpoint: { ...this.checkpoint, accumulator: this.accumulator.exportSnapshot(), guildNames: { ...this.guildNames }, updatedAt },
@@ -146,6 +162,20 @@ export class KoObservationProcessor {
     this.totalsDirty = false;
     this.immediate = false;
     return publication;
+  }
+
+  private recordDiagnostic(priority: boolean, details: DiagnosticDecision["details"]): void {
+    if (this.diagnosticDecisions.length === MAX_DIAGNOSTIC_DECISIONS) {
+      this.omittedDecisions++;
+      if (!priority) return;
+      const replaceable = this.diagnosticDecisions.findIndex((entry) => !entry.priority);
+      if (replaceable < 0) {
+        this.omittedPriorityDecisions++;
+        return;
+      }
+      this.diagnosticDecisions.splice(replaceable, 1);
+    }
+    this.diagnosticDecisions.push({ priority, details });
   }
 
   private guildId(raw: string | null): string | null {

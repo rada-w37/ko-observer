@@ -67,6 +67,7 @@ export type KoStateUpdateResult = {
   reasons: KoPersistReason[];
   decision: {
     previous: KoBattleCounts | null;
+    previousObservedAt: Date | null;
     previousGuilds: { defenderGuildId: string | null; attackerGuildId: string | null } | null;
     current: KoBattleCounts;
     transitions: Array<KoTransition | KoObservationBoundary | "baseline" | "reset" | "model_mismatch" | "unverified_zero_baseline">;
@@ -139,7 +140,9 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
     (!comparison || (current.defense >= comparison.defense && current.attack >= comparison.attack));
   const previousGuilds = previous && previousState
     ? { defenderGuildId: previousState.defenderGuildId, attackerGuildId: previousState.attackerGuildId } : null;
-  const decision: KoStateUpdateResult["decision"] = { previous, previousGuilds, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
+  const decision: KoStateUpdateResult["decision"] = { previous, previousGuilds,
+    previousObservedAt: previous ? previousState!.lastObservedAt : null,
+    current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
   if (observation.boundary) {
     state = resetKoEvidence(state);
     decision.transitions = [observation.boundary];
