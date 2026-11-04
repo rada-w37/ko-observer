@@ -1,6 +1,6 @@
 import { battleCastleKind, minimumFreshPartySize } from "../koo/koAttributionCandidates.js";
 import { KoAccumulator } from "../koo/koAccumulator.js";
-import type { KoPersistReason } from "../koo/koAttribution.js";
+import type { KoObservationBoundary, KoPersistReason } from "../koo/koAttribution.js";
 import type { BattleSubscriptionScope } from "../koo/battleScopeResolver.js";
 import type { ObservationCheckpoint } from "../koo/observationRun.js";
 import { parseRealtimePayload, type RealtimePayloadBytes } from "../mentemori/realtimeParser.js";
@@ -14,8 +14,10 @@ export type ActiveBattleScope = Exclude<BattleSubscriptionScope, { subscriptionT
 const MAX_DIAGNOSTIC_DECISIONS = 128;
 const LAST_CONFIRMED_PLACEMENT_WORLD_ID = 1107;
 
-function isCounterattack(state: number | undefined): boolean {
-  return state === GVG_CASTLE_STATE.activeCounterattack || state === GVG_CASTLE_STATE.activeCounterattackSuccessful;
+function unverifiedBattleBoundary(phase: number | undefined): KoObservationBoundary | undefined {
+  if (phase === GVG_CASTLE_STATE.activeBattle) return "fallen_baseline";
+  if (phase === GVG_CASTLE_STATE.activeCounterattack || phase === GVG_CASTLE_STATE.activeCounterattackSuccessful) return "counterattack_baseline";
+  return undefined;
 }
 
 export class KoObservationProcessor {
@@ -28,7 +30,7 @@ export class KoObservationProcessor {
   private readonly diagnosticDecisions: Array<Record<string, unknown>> = [];
   private omittedDecisions = 0;
   private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
-    ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0, counterattack_baseline: 0,
+    ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0, counterattack_baseline: 0, fallen_baseline: 0,
     rebased: 0, before_battle: 0, initial_or_unchanged: 0,
   };
   private readonly fullGuildIds = new Map<string, string>();
@@ -85,7 +87,7 @@ export class KoObservationProcessor {
         attackerGuildId, attackerGuildName, defensePartyCount: message.defensePartyCount, attackPartyCount: message.attackPartyCount,
         koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt,
         normalBattlePhase: phase === GVG_CASTLE_STATE.activeDeclared,
-        counterattackBoundary: isCounterattack(previousPhase) || isCounterattack(phase),
+        boundary: unverifiedBattleBoundary(phase) ?? unverifiedBattleBoundary(previousPhase),
         freshPartyKoLowerBound: placementMinimum ?? 1 });
       this.castlePhases.set(message.castleId, phase);
       if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate ||= result.rebased || result.reasons.includes("guilds_changed"); }

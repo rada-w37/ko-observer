@@ -56,6 +56,30 @@ test("zero evidence is lost on an unexplained party loss, changed guilds or reco
   }
 });
 
+test("fallen frames rebase uncertain guild sides and preserve confirmed totals", () => {
+  for (const fallenGuildId of [111111111, 333333333]) {
+    const { processor, logs } = fixture();
+    processor.process(castlePayload(0, 3), beforeBattle);
+    processor.process(castlePayload(3, 2), observedAt);
+    processor.process(castlePayload(7, 1), observedAt);
+    processor.process(castlePayload(10, 0, fallenGuildId, GVG_CASTLE_STATE.activeBattle), observedAt);
+    processor.process(castlePayload(13, 0, fallenGuildId, GVG_CASTLE_STATE.activeBattle), observedAt);
+    assert.equal(processor.accumulator.getGuildTotals().get("111111111037")?.totalVictimKoCount, 7);
+    processor.process(castlePayload(7, 10, fallenGuildId), observedAt);
+    processor.process(castlePayload(10, 9, fallenGuildId), observedAt);
+    assert.equal(processor.accumulator.getGuildTotals().get(`${fallenGuildId}037`)?.totalVictimKoCount,
+      fallenGuildId === 111111111 ? 10 : 3);
+    processor.takePublication(observedAt);
+    const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
+    const boundary = decisions.find((entry: { phase: number }) => entry.phase === GVG_CASTLE_STATE.activeBattle);
+    assert.deepEqual(boundary.transitions, ["fallen_baseline"]);
+    assert.deepEqual(boundary.previous, { ko: 7, defense: 1, attack: 100 });
+    assert.deepEqual(boundary.current, { ko: 10, defense: 0, attack: 100 });
+    assert.equal(boundary.previousGuilds.defenderGuildId, "111111111037");
+    assert.equal(boundary.defenderGuildId, `${fallenGuildId}037`);
+  }
+});
+
 test("progress distinguishes a confirmed KO from pending attribution", () => {
   const { processor } = fixture();
   processor.process(castlePayload(), beforeBattle);

@@ -1,5 +1,7 @@
 import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate, type KoBattleCounts, type KoLowerBound, type KoTransition } from "./koAttributionCandidates.js";
 
+export type KoObservationBoundary = "fallen_baseline" | "counterattack_baseline";
+
 export type KoCastleObservation = {
   castleId: number;
   defenderGuildId: string | null;
@@ -11,7 +13,7 @@ export type KoCastleObservation = {
   koCount: number;
   observedAt: Date;
   normalBattlePhase?: boolean;
-  counterattackBoundary?: boolean;
+  boundary?: KoObservationBoundary;
   freshPartyKoLowerBound?: KoLowerBound;
 };
 
@@ -63,14 +65,21 @@ export type KoStateUpdateResult = {
   checkpointSlot: number | null;
   freshBattleZero: boolean;
   reasons: KoPersistReason[];
-  decision: { previous: KoBattleCounts | null; current: KoBattleCounts; transitions: Array<KoTransition | "baseline" | "reset" | "model_mismatch" | "unverified_zero_baseline" | "counterattack_baseline">; defenseCredit: number; attackCredit: number };
+  decision: {
+    previous: KoBattleCounts | null;
+    previousGuilds: { defenderGuildId: string | null; attackerGuildId: string | null } | null;
+    current: KoBattleCounts;
+    transitions: Array<KoTransition | KoObservationBoundary | "baseline" | "reset" | "model_mismatch" | "unverified_zero_baseline">;
+    defenseCredit: number;
+    attackCredit: number;
+  };
 };
 
 export type KoPersistReason =
   | "ko_decreased"
   | "ko_increased"
   | "model_mismatch"
-  | "counterattack_baseline"
+  | KoObservationBoundary
   | "guilds_changed";
 
 
@@ -122,25 +131,27 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   state.attackerGuildId = observation.attackerGuildId; state.attackerGuildName = observation.attackerGuildName;
   let defenseCredit = 0, attackCredit = 0;
   const current = { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount };
-  const previous = state.lastKoCount === null || state.lastDefensePartyCount === null || state.lastAttackPartyCount === null
-    ? null : { ko: state.lastKoCount, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount };
-  const freshBattleZero = current.ko === 0 && observation.normalBattlePhase !== false && !observation.counterattackBoundary &&
-    (checkpointSlot === null || (previousFreshBattleZero && previous?.ko === 0)) &&
-    (!previous || (current.defense >= previous.defense && current.attack >= previous.attack));
-  const decision: KoStateUpdateResult["decision"] = { previous: null, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
-  if (observation.counterattackBoundary) {
+  const previous = !previousState || previousState.lastKoCount === null || previousState.lastDefensePartyCount === null || previousState.lastAttackPartyCount === null
+    ? null : { ko: previousState.lastKoCount, defense: previousState.lastDefensePartyCount, attack: previousState.lastAttackPartyCount };
+  const comparison = changed ? null : previous;
+  const freshBattleZero = current.ko === 0 && observation.normalBattlePhase !== false && !observation.boundary &&
+    (checkpointSlot === null || (previousFreshBattleZero && comparison?.ko === 0)) &&
+    (!comparison || (current.defense >= comparison.defense && current.attack >= comparison.attack));
+  const previousGuilds = previous && previousState
+    ? { defenderGuildId: previousState.defenderGuildId, attackerGuildId: previousState.attackerGuildId } : null;
+  const decision: KoStateUpdateResult["decision"] = { previous, previousGuilds, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
+  if (observation.boundary) {
     state = resetKoEvidence(state);
-    decision.transitions = ["counterattack_baseline"];
-    reasons.push("counterattack_baseline");
-  } else if (checkpointSlot !== null && previous) {
-    const previousKo = previous.ko;
-    decision.previous = previous;
+    decision.transitions = [observation.boundary];
+    reasons.push(observation.boundary);
+  } else if (checkpointSlot !== null && comparison) {
+    const previousKo = comparison.ko;
     if (observation.koCount === 0) { state = resetKoEvidence(state); decision.transitions = ["reset"]; }
     else if (previousKo === 0 && (!previousFreshBattleZero || observation.normalBattlePhase === false)) {
       decision.transitions = ["unverified_zero_baseline"];
     } else {
       const result = advanceKoCandidates(state.candidates,
-        decision.previous, current, observation.freshPartyKoLowerBound ?? minimumFreshPartySize(observation.castleId));
+        comparison, current, observation.freshPartyKoLowerBound ?? minimumFreshPartySize(observation.castleId));
       decision.transitions = result.candidates.length ? result.transitions : ["model_mismatch"];
       if (!result.candidates.length) { state = resetKoEvidence(state); state.modelMismatchCount++; reasons.push("model_mismatch"); }
       else {
