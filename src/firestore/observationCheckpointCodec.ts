@@ -80,8 +80,15 @@ function validate(input: unknown): asserts input is Record<string, any> {
       for (const candidate of state.candidates) {
         if (!record(candidate) || !["defense", "attack"].includes(candidate.side) ||
             !Array.isArray(candidate.min) || !Array.isArray(candidate.max) || candidate.min.length !== 3 || candidate.max.length !== 3 ||
-            !candidate.min.every(count) || !candidate.max.every(count) || candidate.min.some((n: number, i: number) => n > candidate.max[i]) ||
-            candidate.min[0] + candidate.min[1] > candidate.min[2] || candidate.max[2] > candidate.max[0] + candidate.max[1]) invalid();
+            !candidate.min.every(count) || !candidate.max.every(count) || candidate.min.some((n: number, i: number) => n > candidate.max[i])) invalid();
+        const [defenseMin, attackMin, totalMin] = candidate.min;
+        const [defenseMax, attackMax, totalMax] = candidate.max;
+        const defenseMaxWithAttackMin = defenseMax + attackMin;
+        const attackMaxWithDefenseMin = attackMax + defenseMin;
+        // Every side extremum must be attainable with some total in the stored range.
+        if (totalMin < defenseMin + attackMin || totalMax > defenseMax + attackMax ||
+            totalMax < Math.max(defenseMaxWithAttackMin, attackMaxWithDefenseMin) ||
+            totalMin > Math.min(defenseMaxWithAttackMin, attackMaxWithDefenseMin)) invalid();
       }
     }
     for (const total of Object.values(state.guildVictimKoTotals)) {

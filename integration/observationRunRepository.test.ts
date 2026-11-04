@@ -196,17 +196,20 @@ test("same-day legacy data is rejected and preserved without creating a checkpoi
 });
 
 test("corrupt or unsupported checkpoints never delete or rebuild existing public data", async () => {
-  const corrupt = { ...encodeObservationCheckpoint(checkpoint(7)), schemaVersion: 99 };
-  await checkpointRef.set(corrupt);
+  const encoded = encodeObservationCheckpoint(checkpoint(7)) as unknown as ObservationCheckpoint;
+  encoded.accumulator.castleStates[0].candidates = [{ side: "defense", min: [0, 0, 0], max: [0, 5, 3] }];
   await total(DEFENDER).set({ guildName: "Existing", totalVictimKoCount: 41 });
   await castle(1).set({ castleId: 1, existing: true });
   const repository = new ObservationRunRepository(firestore);
   const lease = await repository.acquire();
-  await assert.rejects(repository.resume(lease, identity(), {}, STARTED_AT), /unsupported or corrupt/i);
-  assert.deepEqual((await checkpointRef.get()).data(), corrupt);
-  assert.deepEqual((await total(DEFENDER).get()).data(), { guildName: "Existing", totalVictimKoCount: 41 });
-  assert.deepEqual((await castle(1).get()).data(), { castleId: 1, existing: true });
-  assert.equal((await meta.get()).exists, false);
+  for (const corrupt of [encoded, { ...encodeObservationCheckpoint(checkpoint(7)), schemaVersion: 99 }]) {
+    await checkpointRef.set(corrupt);
+    await assert.rejects(repository.resume(lease, identity(), {}, STARTED_AT), /unsupported or corrupt/i);
+    assert.deepEqual((await checkpointRef.get()).data(), corrupt);
+    assert.deepEqual((await total(DEFENDER).get()).data(), { guildName: "Existing", totalVictimKoCount: 41 });
+    assert.deepEqual((await castle(1).get()).data(), { castleId: 1, existing: true });
+    assert.equal((await meta.get()).exists, false);
+  }
 });
 
 test("failed new-day initialization is atomic and a successful new day resets only the published dataset", async () => {

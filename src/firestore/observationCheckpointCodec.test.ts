@@ -98,6 +98,22 @@ test("checkpoint codec rejects impossible battle dates even when their identity 
   }
 });
 
+test("checkpoint codec rejects impossible side extrema on both read and write", () => {
+  for (const candidate of [
+    { side: "defense", min: [0, 0, 0], max: [0, 5, 3] },
+    { side: "defense", min: [0, 0, 4], max: [2, 5, 6] },
+    { side: "attack", min: [0, 0, 0], max: [5, 0, 3] },
+    { side: "attack", min: [0, 0, 4], max: [5, 2, 6] },
+  ] satisfies ObservationCheckpoint["accumulator"]["castleStates"][number]["candidates"]) {
+    const original = checkpoint();
+    const stored = encodeObservationCheckpoint(original) as typeof original;
+    original.accumulator.castleStates[0].candidates = [candidate];
+    stored.accumulator.castleStates[0].candidates = [candidate];
+    assert.throws(() => encodeObservationCheckpoint(original), /unsupported or corrupt/i);
+    assert.throws(() => decodeObservationCheckpoint(stored), /unsupported or corrupt/i);
+  }
+});
+
 test("checkpoint encoder rejects invalid dates without rewriting caller state", () => {
   const original = checkpoint();
   original.updatedAt = new Date(Number.NaN);
