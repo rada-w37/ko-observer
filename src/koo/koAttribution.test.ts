@@ -4,7 +4,7 @@ import { applyKoObservation, calculateGuildKoTotals, createKoCastlePublicSnapsho
 
 function observation(koCount: number, defensePartyCount = 100, attackPartyCount = 100, overrides: Partial<KoCastleObservation> = {}): KoCastleObservation {
   return { castleId: 1, defenderGuildId: "D", defenderGuildName: "Defender", attackerGuildId: "A", attackerGuildName: "Attacker",
-    koCount, defensePartyCount, attackPartyCount, observedAt: new Date("2026-11-04T12:00:00Z"), ...overrides };
+    koCount, defensePartyCount, attackPartyCount, observedAt: new Date(koCount === 0 ? "2026-11-04T11:44:59Z" : "2026-11-04T12:00:00Z"), ...overrides };
 }
 function play(...frames: KoCastleObservation[]): KoCastleState {
   let state: KoCastleState | undefined;
@@ -17,6 +17,19 @@ test("first nonzero observation is only a baseline", () => {
 test("before-battle observation is not credited", () => {
   const time = new Date("2026-11-04T11:44:59Z");
   assert.equal(calculateGuildKoTotals([play(observation(0, 100, 100, { observedAt: time }), observation(3, 99, 100, { observedAt: time }))]).size, 0);
+});
+test("a pre-battle zero rejects a fresh one-character loss", () => {
+  const state = play(observation(0), observation(1, 99));
+  assert.equal(state.modelMismatchCount, 1);
+  assert.equal(calculateGuildKoTotals([state]).size, 0);
+});
+test("a zero during battle without evidence of fresh deployment uses the next value as a baseline", () => {
+  const zero = observation(0, 100, 100, { observedAt: new Date("2026-11-04T12:00:00Z") });
+  const result = applyKoObservation(play(zero), observation(1, 99));
+  assert.deepEqual(result.decision.transitions, ["unverified_zero_baseline"]);
+  assert.equal(result.state.modelMismatchCount, 0);
+  assert.equal(calculateGuildKoTotals([result.state]).size, 0);
+  assert.equal(applyKoObservation(result.state, observation(4, 98)).decision.defenseCredit, 3);
 });
 test("stable winner credits its increments without requiring another visible loss", () => {
   const state = play(observation(0), observation(3, 99), observation(7, 98), observation(10, 98), observation(13, 98));
@@ -56,7 +69,8 @@ test("guild replacement retains old guild totals and rebases new sides", () => {
   assert.equal(createKoCastlePublicSnapshot(state).defender.koVictimCount, 3);
 });
 test("a zero reset closes unresolved bounds without decreasing totals", () => {
-  const state = play(observation(0), observation(3, 99), observation(3, 99), observation(0, 99));
+  const state = play(observation(0), observation(3, 99), observation(3, 99),
+    observation(0, 99, 100, { observedAt: new Date("2026-11-04T12:00:01Z") }));
   assert.deepEqual(state.closedUnresolvedKo, [0, 3]);
   assert.equal(state.guildVictimKoTotals.D.totalVictimKoCount, 3);
 });

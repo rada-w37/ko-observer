@@ -3,6 +3,7 @@ import test from "node:test";
 import { KoObservationProcessor, type ActiveBattleScope } from "./koObservationProcessor.js";
 import { createObservationIdentity, type ObservationCheckpoint } from "../koo/observationRun.js";
 import { buildGvgStreamId } from "../mentemori/streamId.js";
+import { GVG_CASTLE_STATE } from "../mentemori/types.js";
 import { NoopNotificationCoordinator } from "../notifications/application/notificationCoordinator.js";
 
 const observedAt = new Date("2026-11-02T11:45:01Z");
@@ -12,9 +13,9 @@ const scope: ActiveBattleScope = { battleType: "guildBattle", subscriptionType: 
 function fixture(checkpoint: ObservationCheckpoint = {
   schemaVersion: 2, identity: createObservationIdentity("2026-11-02", "guildBattle", 1037),
   accumulator: { revision: 0, castleStates: [] }, guildNames: {}, participantGuilds: {}, updatedAt: observedAt,
-}) {
+}, battleScope: ActiveBattleScope = scope) {
   const logs: string[] = [];
-  const processor = new KoObservationProcessor(scope, checkpoint, new NoopNotificationCoordinator(), "test", (line) => logs.push(line));
+  const processor = new KoObservationProcessor(battleScope, checkpoint, new NoopNotificationCoordinator(), "test", (line) => logs.push(line));
   return { processor, logs };
 }
 
@@ -24,6 +25,7 @@ function castlePayload(koCount = 0, defensePartyCount = 100, guildId = 111111111
   view.setUint32(0, buildGvgStreamId({ castleId: 1, worldId: 1037, block: 0, worldGroupId: 0, gvgClass: 0 }), true);
   view.setUint32(4, guildId, true); view.setUint32(8, 222222222, true);
   view.setUint16(16, defensePartyCount, true); view.setUint16(18, 100, true); view.setUint16(22, koCount, true);
+  view.setUint8(20, koCount === 0 ? GVG_CASTLE_STATE.activeDeclared : GVG_CASTLE_STATE.activeBattle);
   return bytes;
 }
 
@@ -49,10 +51,21 @@ test("publication logs input, viable transitions and confirmed credit in bounded
   assert.equal(decisions.length, 128);
   assert.equal(decisions[1].minimumFreshPartySize, 3);
   assert.equal(decisions[1].defenseCredit, 3);
+  assert.deepEqual(decisions[1].transitions, ["first_battle"]);
   assert.deepEqual(decisions[1].previous, { ko: 0, defense: 100, attack: 100 });
   assert.ok(decisions.at(-1).transitions.includes("switch"));
   processor.takePublication(observedAt);
   assert.equal(logs.length, 1);
+});
+
+test("unverified placement rules leave small KO increments as candidates", () => {
+  const { processor, logs } = fixture(undefined, { ...scope, worldId: "1108" });
+  processor.process(castlePayload(7), observedAt);
+  processor.process(castlePayload(8, 99), observedAt);
+  processor.takePublication(observedAt);
+  const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
+  assert.equal(decisions[1].minimumFreshPartySize, null);
+  assert.equal(decisions[1].defenseCredit, 1);
 });
 
 test("invalid payload diagnostics retain parser reasons and location without raw data or partial attribution", async (context) => {

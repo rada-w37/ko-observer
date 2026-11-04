@@ -5,6 +5,7 @@ import type { GvgRealtimeClient, GvgRealtimeClientEvent } from "../mentemori/rea
 import { runPhase5KoObserveLoop } from "./phase5KoObserveLoop.js";
 import type { AppConfig } from "./config.js";
 import { buildGvgStreamId } from "../mentemori/streamId.js";
+import { GVG_CASTLE_STATE } from "../mentemori/types.js";
 import { calculateGuildKoTotals } from "../koo/koAttribution.js";
 import type { ObservationCheckpoint, ObservationIdentity, ObservationLease, ObservationRunStore } from "../koo/observationRun.js";
 import { NoopNotificationCoordinator, type NotificationCoordinator } from "../notifications/application/notificationCoordinator.js";
@@ -51,7 +52,8 @@ function castle(overrides: Partial<{ guildId: number; attackerGuildId: number; d
   view.setUint32(0, buildGvgStreamId({ castleId: 1, block: 0, worldGroupId: 0, gvgClass: 0, worldId: 1037 }), true);
   view.setUint32(4, overrides.guildId ?? 111111111, true); view.setUint32(8, overrides.attackerGuildId ?? 222222222, true);
   view.setUint16(16, overrides.defense ?? 10, true); view.setUint16(18, overrides.attack ?? 10, true);
-  view.setUint8(20, 1); view.setUint16(22, overrides.ko ?? 0, true); return bytes;
+  view.setUint8(20, overrides.ko ? GVG_CASTLE_STATE.activeBattle : GVG_CASTLE_STATE.activeDeclared);
+  view.setUint16(22, overrides.ko ?? 0, true); return bytes;
 }
 
 test("initializes Grand Battle participants with zero KO in the saved run", async () => {

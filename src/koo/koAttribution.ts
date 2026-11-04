@@ -1,4 +1,4 @@
-import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate, type KoBattleCounts, type KoTransition } from "./koAttributionCandidates.js";
+import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate, type KoBattleCounts, type KoLowerBound, type KoTransition } from "./koAttributionCandidates.js";
 
 export type KoCastleObservation = {
   castleId: number;
@@ -10,6 +10,9 @@ export type KoCastleObservation = {
   attackPartyCount: number;
   koCount: number;
   observedAt: Date;
+  declaredBeforeBattle?: boolean;
+  counterattackBoundary?: boolean;
+  freshPartyKoLowerBound?: KoLowerBound;
 };
 
 export type KoSideSnapshot = {
@@ -59,13 +62,14 @@ export type KoStateUpdateResult = {
   shouldUpdateGuildTotals: boolean;
   checkpointSlot: number | null;
   reasons: KoPersistReason[];
-  decision: { previous: KoBattleCounts | null; current: KoBattleCounts; transitions: Array<KoTransition | "baseline" | "reset" | "model_mismatch">; defenseCredit: number; attackCredit: number };
+  decision: { previous: KoBattleCounts | null; current: KoBattleCounts; transitions: Array<KoTransition | "baseline" | "reset" | "model_mismatch" | "unverified_zero_baseline" | "counterattack_baseline">; defenseCredit: number; attackCredit: number };
 };
 
 export type KoPersistReason =
   | "ko_decreased"
   | "ko_increased"
   | "model_mismatch"
+  | "counterattack_baseline"
   | "guilds_changed";
 
 
@@ -117,13 +121,19 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   let defenseCredit = 0, attackCredit = 0;
   const current = { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount };
   const decision: KoStateUpdateResult["decision"] = { previous: null, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
-  if (checkpointSlot !== null && state.lastKoCount !== null && state.lastDefensePartyCount !== null && state.lastAttackPartyCount !== null) {
+  if (observation.counterattackBoundary) {
+    state = resetKoEvidence(state);
+    decision.transitions = ["counterattack_baseline"];
+    reasons.push("counterattack_baseline");
+  } else if (checkpointSlot !== null && state.lastKoCount !== null && state.lastDefensePartyCount !== null && state.lastAttackPartyCount !== null) {
     const previousKo = state.lastKoCount;
     decision.previous = { ko: previousKo, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount };
     if (observation.koCount === 0) { state = resetKoEvidence(state); decision.transitions = ["reset"]; }
-    else {
+    else if (previousKo === 0 && state.lastCheckpointSlot !== null && !observation.declaredBeforeBattle) {
+      decision.transitions = ["unverified_zero_baseline"];
+    } else {
       const result = advanceKoCandidates(state.candidates,
-        decision.previous, current, minimumFreshPartySize(observation.castleId));
+        decision.previous, current, observation.freshPartyKoLowerBound ?? minimumFreshPartySize(observation.castleId));
       decision.transitions = result.candidates.length ? result.transitions : ["model_mismatch"];
       if (!result.candidates.length) { state = resetKoEvidence(state); state.modelMismatchCount++; reasons.push("model_mismatch"); }
       else {

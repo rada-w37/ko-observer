@@ -15,7 +15,7 @@ function checkpoint(): ObservationCheckpoint {
     defensePartyCount: 100, attackPartyCount: 100, koCount: 0,
     observedAt: new Date("2026-11-02T11:45:01.123Z"),
   };
-  accumulator.observe(observation);
+  accumulator.observe({ ...observation, observedAt: new Date("2026-11-02T11:44:59Z") });
   accumulator.observe({ ...observation, defensePartyCount: 99, koCount: 3 });
   accumulator.observe({ ...observation, defensePartyCount: 98, koCount: 7 });
   accumulator.observe({ ...observation, defensePartyCount: 98, koCount: 2 });

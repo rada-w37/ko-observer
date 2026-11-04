@@ -4,6 +4,7 @@ import type { KoPersistReason } from "../koo/koAttribution.js";
 import type { BattleSubscriptionScope } from "../koo/battleScopeResolver.js";
 import type { ObservationCheckpoint } from "../koo/observationRun.js";
 import { parseRealtimePayload, type RealtimePayloadBytes } from "../mentemori/realtimeParser.js";
+import { GVG_CASTLE_STATE } from "../mentemori/types.js";
 import { resolveCastleName } from "../notifications/domain/castleName.js";
 import { createFallbackBaseName, resolveDisplayGuildSides } from "../notifications/domain/notificationDomain.js";
 import type { NotificationCoordinator } from "../notifications/application/notificationCoordinator.js";
@@ -11,6 +12,11 @@ import type { NotificationCoordinator } from "../notifications/application/notif
 export type ActiveBattleScope = Exclude<BattleSubscriptionScope, { subscriptionType: "none" }>;
 
 const MAX_DIAGNOSTIC_DECISIONS = 128;
+const LAST_CONFIRMED_PLACEMENT_WORLD_ID = 1107;
+
+function isCounterattack(state: number | undefined): boolean {
+  return state === GVG_CASTLE_STATE.activeCounterattack || state === GVG_CASTLE_STATE.activeCounterattackSuccessful;
+}
 
 export class KoObservationProcessor {
   readonly accumulator;
@@ -22,10 +28,12 @@ export class KoObservationProcessor {
   private readonly diagnosticDecisions: Array<Record<string, unknown>> = [];
   private omittedDecisions = 0;
   private readonly decisionCounts: Record<KoPersistReason | "rebased" | "before_battle" | "initial_or_unchanged", number> = {
-    ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0,
+    ko_increased: 0, ko_decreased: 0, model_mismatch: 0, guilds_changed: 0, counterattack_baseline: 0,
     rebased: 0, before_battle: 0, initial_or_unchanged: 0,
   };
   private readonly fullGuildIds = new Map<string, string>();
+  private readonly castlePhases = new Map<number, number>();
+  private readonly placementMinimumConfirmed: boolean;
 
   constructor(private readonly scope: ActiveBattleScope, private readonly checkpoint: ObservationCheckpoint,
     private readonly notifications: NotificationCoordinator, private readonly runId: string,
@@ -33,6 +41,8 @@ export class KoObservationProcessor {
   ) {
     this.accumulator = new KoAccumulator(checkpoint.accumulator);
     this.guildNames = { ...checkpoint.guildNames };
+    this.placementMinimumConfirmed = scope.subscriptionType === "guildBattle"
+      && Number(scope.worldId) >= 1001 && Number(scope.worldId) <= LAST_CONFIRMED_PLACEMENT_WORLD_ID;
     if (scope.subscriptionType === "grandBattle") {
       for (const guild of scope.participantGuilds) {
         this.fullGuildIds.set(guild.guildId, guild.guildId);
@@ -40,6 +50,11 @@ export class KoObservationProcessor {
         this.guildNames[guild.guildId] = guild.guildName;
       }
     }
+  }
+
+  beginObservationEpoch(): void {
+    this.castlePhases.clear();
+    this.accumulator.beginObservationEpoch();
   }
 
   process(payload: RealtimePayloadBytes, receivedAt: Date): { castleReceived: boolean; reconnect?: boolean } {
@@ -63,9 +78,16 @@ export class KoObservationProcessor {
       const attackerGuildId = this.guildId(message.attackerGuildId);
       const ownerGuildName = ownerGuildId ? this.guildNames[ownerGuildId] ?? null : null;
       const attackerGuildName = attackerGuildId ? this.guildNames[attackerGuildId] ?? null : null;
+      const previousPhase = this.castlePhases.get(message.castleId);
+      const phase = message.gvgCastleState;
+      const placementMinimum = this.placementMinimumConfirmed ? minimumFreshPartySize(message.castleId) : null;
       const result = this.accumulator.observe({ castleId: message.castleId, defenderGuildId: ownerGuildId, defenderGuildName: ownerGuildName,
         attackerGuildId, attackerGuildName, defensePartyCount: message.defensePartyCount, attackPartyCount: message.attackPartyCount,
-        koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt });
+        koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt,
+        declaredBeforeBattle: previousPhase === GVG_CASTLE_STATE.activeDeclared && phase === GVG_CASTLE_STATE.activeBattle,
+        counterattackBoundary: isCounterattack(previousPhase) || isCounterattack(phase),
+        freshPartyKoLowerBound: placementMinimum ?? 1 });
+      this.castlePhases.set(message.castleId, phase);
       if (result.shouldPersistCastle) { this.pendingCastles.add(message.castleId); this.immediate ||= result.rebased || result.reasons.includes("guilds_changed"); }
       this.totalsDirty ||= result.shouldUpdateGuildTotals;
       for (const reason of result.reasons) this.decisionCounts[reason]++;
@@ -73,7 +95,8 @@ export class KoObservationProcessor {
       if (result.checkpointSlot !== null && result.decision.transitions.some((transition) => transition !== "no_battle")) {
         if (this.diagnosticDecisions.length >= MAX_DIAGNOSTIC_DECISIONS) this.omittedDecisions++;
         else this.diagnosticDecisions.push({ castleId: message.castleId, castleKind: battleCastleKind(message.castleId),
-          minimumFreshPartySize: minimumFreshPartySize(message.castleId), observedAt: receivedAt.toISOString(),
+          minimumFreshPartySize: placementMinimum, freshPartyKoLowerBound: placementMinimum ?? 1,
+          previousPhase, phase, observedAt: receivedAt.toISOString(),
           defenderGuildId: ownerGuildId, attackerGuildId, rebased: result.rebased, reasons: result.reasons,
           ...result.decision, candidates: result.state.candidates });
       }

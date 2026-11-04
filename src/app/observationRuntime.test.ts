@@ -7,6 +7,7 @@ import { ObservationOwnershipError, type ObservationCheckpoint, type Observation
 import { calculateGuildKoTotals } from "../koo/koAttribution.js";
 import type { GvgRealtimeClient, GvgRealtimeClientListener } from "../mentemori/realtimeClient.js";
 import { createGuildBattleSubscriptionPayload } from "../mentemori/streamId.js";
+import { GVG_CASTLE_STATE } from "../mentemori/types.js";
 
 class MemoryStore implements ObservationRunStore {
   saved?: ObservationCheckpoint;
@@ -35,10 +36,10 @@ class Client {
   addEventListener(listener: GvgRealtimeClientListener) { this.listener = listener; return () => { this.listener = undefined; }; }
   async connect() { this.connected++; this.send(0); this.send(3); }
   disconnect() { this.closed++; }
-  send(ko: number) {
+  send(ko: number, phase: number = ko === 0 ? GVG_CASTLE_STATE.activeDeclared : GVG_CASTLE_STATE.activeBattle, defense = 100 - ko / 3) {
     const bytes = new Uint8Array(24); const view = new DataView(bytes.buffer);
     view.setUint32(0, 1, true); view.setUint32(4, 111111111, true); view.setUint32(8, 222222222, true);
-    view.setUint16(16, 100 - ko / 3, true); view.setUint16(18, 100, true); view.setUint8(20, 1); view.setUint16(22, ko, true);
+    view.setUint16(16, defense, true); view.setUint16(18, 100, true); view.setUint8(20, phase); view.setUint16(22, ko, true);
     this.listener?.({ type: "payloadReceived", payload: bytes });
   }
 }
@@ -82,6 +83,21 @@ test("ownership loss stops the receiver and does not claim a successful run", as
   assert.equal(client.closed, 1);
   assert.ok(logs.some((line) => line.includes("outcome=failed")));
   assert.ok(logs.some((line) => line.includes("outcome=failed received=2")));
+});
+
+test("counterattack frames cannot credit unverified guild sides; normal attribution resumes after a baseline", async () => {
+  const { runtime, store, logs } = fixture(new MemoryStore(), (clock, client) => {
+    if (clock === 100) client.send(0, GVG_CASTLE_STATE.activeCounterattack, 99);
+    if (clock === 150) client.send(1, GVG_CASTLE_STATE.activeCounterattack, 98);
+    if (clock === 200) client.send(4, GVG_CASTLE_STATE.activeCounterattackSuccessful, 97);
+    if (clock === 250) client.send(7, GVG_CASTLE_STATE.activeBattle, 96);
+    if (clock === 300) client.send(10, GVG_CASTLE_STATE.activeBattle, 95);
+  });
+  await runtime.run();
+  const [castle] = store.saved!.accumulator.castleStates;
+  assert.equal(castle.defenseVictimKoTotal, 6);
+  assert.equal(castle.modelMismatchCount, 0);
+  assert.ok(logs.some((line) => line.includes('"transitions":["counterattack_baseline"]')));
 });
 
 test("cancellation stops ingress and still flushes already processed observations", async () => {

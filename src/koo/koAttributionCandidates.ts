@@ -1,5 +1,6 @@
 export type VictimSide = "defense" | "attack";
-export type KoTransition = "no_battle" | "continuation" | "switch";
+export type KoTransition = "no_battle" | "first_battle" | "continuation" | "switch";
+export type KoLowerBound = 1 | 2 | 3;
 export type KoCandidate = { side: VictimSide; min: [number, number, number]; max: [number, number, number] };
 export type KoBattleCounts = { ko: number; defense: number; attack: number };
 
@@ -17,7 +18,7 @@ export function initialKoCandidates(): KoCandidate[] {
 }
 
 export function advanceKoCandidates(candidates: readonly KoCandidate[], previous: KoBattleCounts,
-  current: KoBattleCounts, minimum: 2 | 3): { candidates: KoCandidate[]; defenseCredit: number; attackCredit: number; transitions: KoTransition[] } {
+  current: KoBattleCounts, minimum: KoLowerBound): { candidates: KoCandidate[]; defenseCredit: number; attackCredit: number; transitions: KoTransition[] } {
   const transitions = new Set<KoTransition>();
   const groups = new Map<VictimSide, KoCandidate>();
   const defenseDelta = current.defense - previous.defense;
@@ -40,10 +41,11 @@ export function advanceKoCandidates(candidates: readonly KoCandidate[], previous
   for (const candidate of candidates) {
     if (delta === 0 && defenseDelta >= 0 && attackDelta >= 0) add(candidate, candidate.side, 0, 0, "no_battle");
     if (delta >= minimum && delta <= 5 && fits(candidate.side)) {
-      add(candidate, candidate.side, candidate.side === "defense" ? delta : 0, candidate.side === "attack" ? delta : 0, "continuation");
+      add(candidate, candidate.side, candidate.side === "defense" ? delta : 0, candidate.side === "attack" ? delta : 0,
+        previous.ko === 0 ? "first_battle" : "continuation");
     }
     const opposite = candidate.side === "defense" ? "attack" : "defense";
-    if (current.ko >= 1 && current.ko <= 5 && fits(opposite)) {
+    if (previous.ko > 0 && current.ko >= 1 && current.ko <= 5 && fits(opposite)) {
       add(candidate, opposite, opposite === "defense" ? current.ko : 0, opposite === "attack" ? current.ko : 0, "switch");
     }
   }

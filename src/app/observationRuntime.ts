@@ -50,7 +50,7 @@ export class ObservationRuntime {
         createClient: this.options.createClient ?? (() => new GvgRealtimeClient({
           connectTimeoutMs: this.policy.connectTimeoutMs, pingIntervalMs: this.policy.pingIntervalMs, pongTimeoutMs: this.policy.pongTimeoutMs,
         })),
-        onEpoch: () => this.processor!.accumulator.beginObservationEpoch(),
+        onEpoch: () => this.processor!.beginObservationEpoch(),
         onPayload: (payload, receivedAt) => this.processor!.process(payload, receivedAt),
         onTick: () => this.tick(), onProgress: () => `${this.processor!.progress} committedRevision=${this.publisher!.status.committedRevision}`,
         log: (message) => this.log(message), signal: this.options.signal, policy: this.policy,

@@ -4,7 +4,7 @@ import { KoAccumulator } from "./koAccumulator.js";
 import type { KoCastleObservation } from "./koAttribution.js";
 function frame(koCount: number, defensePartyCount = 100, castleId = 1, overrides: Partial<KoCastleObservation> = {}): KoCastleObservation {
   return { castleId, defenderGuildId: "D", defenderGuildName: "Defender", attackerGuildId: "A", attackerGuildName: "Attacker",
-    koCount, defensePartyCount, attackPartyCount: 100, observedAt: new Date("2026-11-04T12:00:00Z"), ...overrides };
+    koCount, defensePartyCount, attackPartyCount: 100, observedAt: new Date(koCount === 0 ? "2026-11-04T11:44:59Z" : "2026-11-04T12:00:00Z"), ...overrides };
 }
 test("reconnect rebases castles separately and keeps their prior totals", () => {
   const accumulator = new KoAccumulator();

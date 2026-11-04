@@ -3,6 +3,15 @@ import test from "node:test";
 import { advanceKoCandidates, initialKoCandidates, minimumFreshPartySize, type KoCandidate } from "./koAttributionCandidates.js";
 
 const known = (): KoCandidate[] => [{ side: "defense", min: [0, 0, 0], max: [0, 0, 0] }];
+test("a fresh battle has no prior winner to switch from", () => {
+  const previous = { ko: 0, defense: 100, attack: 100 };
+  for (const minimum of [2, 3] as const) {
+    assert.equal(advanceKoCandidates(initialKoCandidates(), previous, { ...previous, ko: minimum - 1, defense: 99 }, minimum).candidates.length, 0);
+    const valid = advanceKoCandidates(initialKoCandidates(), previous, { ...previous, ko: minimum, defense: 99 }, minimum);
+    assert.equal(valid.defenseCredit, minimum);
+    assert.deepEqual(valid.transitions, ["first_battle"]);
+  }
+});
 test("castle minimums and transition lower bounds", () => {
   for (let id = 1; id <= 21; id++) assert.equal(minimumFreshPartySize(id), id <= 5 ? 3 : 2);
   const previous = { ko: 2, defense: 100, attack: 100 };
@@ -23,7 +32,7 @@ test("same KO can switch; one survivor is counted; stable large streak continues
 test("compressed ranges agree with independently enumerated battle histories", () => {
   let seed = 314159;
   const random = (limit: number) => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed % limit; };
-  for (const minimum of [2, 3] as const) for (let run = 0; run < 300; run++) {
+  for (const minimum of [1, 2, 3] as const) for (let run = 0; run < 300; run++) {
     let candidates = initialKoCandidates();
     let histories = [0, 1].map((side) => ({ side, defense: 0, attack: 0 }));
     let previous = { ko: 0, defense: 100, attack: 100 };
@@ -32,13 +41,14 @@ test("compressed ranges agree with independently enumerated battle histories", (
       const action = random(3);
       const current = { ...previous, defense: previous.defense + random(3), attack: previous.attack + random(3) };
       if (action) {
-        if (action === 2) actualSide = 1 - actualSide;
-        current.ko = action === 2 ? 1 + random(5) : previous.ko + minimum + random(6 - minimum);
+        const switches = action === 2 && previous.ko > 0;
+        if (switches) actualSide = 1 - actualSide;
+        current.ko = switches ? 1 + random(5) : previous.ko + minimum + random(6 - minimum);
         if (actualSide === 0) current.defense--; else current.attack--;
       }
       const expanded: typeof histories = [];
       for (const history of histories) for (const battle of [false, true]) for (const loser of [0, 1]) {
-        if (!battle && loser !== history.side) continue;
+        if (loser !== history.side && (!battle || previous.ko === 0)) continue;
         const amount = !battle ? 0 : loser === history.side ? current.ko - previous.ko : current.ko;
         if (!battle && current.ko !== previous.ko) continue;
         if (battle && (amount < (loser === history.side ? minimum : 1) || amount > 5)) continue;
