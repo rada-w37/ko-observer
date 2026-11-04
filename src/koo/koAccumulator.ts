@@ -20,6 +20,7 @@ export type KoAccumulatorUpdate = KoStateUpdateResult & {
 export class KoAccumulator {
   private readonly castleStates = new Map<number, KoCastleState>();
   private readonly observedCastleIds = new Set<number>();
+  private readonly freshBattleZeros = new Set<number>();
   private revision: number;
 
   constructor(snapshot: KoAccumulatorSnapshot = { revision: 0, castleStates: [] }) {
@@ -32,6 +33,7 @@ export class KoAccumulator {
 
   beginObservationEpoch(): void {
     this.observedCastleIds.clear();
+    this.freshBattleZeros.clear();
     let reset = false;
     for (const [castleId, state] of this.castleStates) {
       const hasBaseline = state.lastKoCount !== null || state.lastDefensePartyCount !== null || state.lastAttackPartyCount !== null;
@@ -48,7 +50,9 @@ export class KoAccumulator {
     const previousState = this.castleStates.get(observation.castleId);
     const rebased = previousState !== undefined && !this.observedCastleIds.has(observation.castleId);
     const comparisonState = rebased ? resetKoEvidence(previousState!) : previousState;
-    const result = applyKoObservation(comparisonState, structuredClone(observation));
+    const result = applyKoObservation(comparisonState, structuredClone(observation), this.freshBattleZeros.has(observation.castleId));
+    if (result.freshBattleZero) this.freshBattleZeros.add(observation.castleId);
+    else this.freshBattleZeros.delete(observation.castleId);
     this.castleStates.set(observation.castleId, result.state);
     this.observedCastleIds.add(observation.castleId);
     this.revision += 1;

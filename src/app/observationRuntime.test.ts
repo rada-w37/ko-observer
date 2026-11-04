@@ -34,9 +34,9 @@ class Client {
   connected = 0;
   closed = 0;
   addEventListener(listener: GvgRealtimeClientListener) { this.listener = listener; return () => { this.listener = undefined; }; }
-  async connect() { this.connected++; this.send(0); this.send(3); }
+  async connect() { this.connected++; this.send(0); }
   disconnect() { this.closed++; }
-  send(ko: number, phase: number = ko === 0 ? GVG_CASTLE_STATE.activeDeclared : GVG_CASTLE_STATE.activeBattle, defense = 100 - ko / 3) {
+  send(ko: number, phase: number = GVG_CASTLE_STATE.activeDeclared, defense = 100 - ko / 3) {
     const bytes = new Uint8Array(24); const view = new DataView(bytes.buffer);
     view.setUint32(0, 1, true); view.setUint32(4, 111111111, true); view.setUint32(8, 222222222, true);
     view.setUint16(16, defense, true); view.setUint16(18, 100, true); view.setUint8(20, phase); view.setUint16(22, ko, true);
@@ -51,8 +51,8 @@ function fixture(store = new MemoryStore(), duringSleep: (clock: number, client:
     scope: { battleType: "guildBattle", subscriptionType: "guildBattle", worldId: "1037", guildId: null, classId: null, worldGroupId: null, blockId: null },
     payload: createGuildBattleSubscriptionPayload("1037"), store, notifications: new NoopNotificationCoordinator(), runId: "test", durationMs,
     createClient: () => client as unknown as GvgRealtimeClient,
-    monotonicNow: () => clock, now: () => new Date(Date.parse("2026-11-02T12:00:00Z") + clock),
-    sleep: async (ms) => { clock += ms; duringSleep(clock, client); }, signal,
+    monotonicNow: () => clock, now: () => new Date(Date.parse("2026-11-02T11:44:59.950Z") + clock),
+    sleep: async (ms) => { clock += ms; if (clock === 50) client.send(3); duringSleep(clock, client); }, signal,
     policy: { ...observationPolicy, publishIntervalMs, renewIntervalMs: 100, progressIntervalMs: 50, shutdownTimeoutMs: 100 },
     log: (message) => logs.push(message),
   });
@@ -90,8 +90,8 @@ test("counterattack frames cannot credit unverified guild sides; normal attribut
     if (clock === 100) client.send(0, GVG_CASTLE_STATE.activeCounterattack, 99);
     if (clock === 150) client.send(1, GVG_CASTLE_STATE.activeCounterattack, 98);
     if (clock === 200) client.send(4, GVG_CASTLE_STATE.activeCounterattackSuccessful, 97);
-    if (clock === 250) client.send(7, GVG_CASTLE_STATE.activeBattle, 96);
-    if (clock === 300) client.send(10, GVG_CASTLE_STATE.activeBattle, 95);
+    if (clock === 250) client.send(7, GVG_CASTLE_STATE.activeDeclared, 96);
+    if (clock === 300) client.send(10, GVG_CASTLE_STATE.activeDeclared, 95);
   });
   await runtime.run();
   const [castle] = store.saved!.accumulator.castleStates;

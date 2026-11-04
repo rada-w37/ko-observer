@@ -35,14 +35,19 @@ const grandScope: BattleSubscriptionScope = { battleType: "grandBattle", subscri
 
 async function run(payloads: Uint8Array[] = [castle()], overrides: Partial<Parameters<typeof runPhase5KoObserveLoop>[2]> = {}, store = new MemoryStore(), scope = guildScope, configOverrides: Partial<AppConfig> = {}) {
   let clock = 0;
+  let payloadIndex = 0;
   const config: AppConfig = { firebaseProjectId: "test", firebaseClientEmail: "test@example.invalid", firebasePrivateKey: "stub", mode: "phase5-ko-observe-loop", runId: "test", worldId: "1037", guildId: "111111111037", observeDurationSeconds: 1, observeIntervalSeconds: 1, seedClear: true, notificationsEnabled: false, notificationsDryRun: true, ...configOverrides };
   let listener: ((event: GvgRealtimeClientEvent) => void) | undefined;
   const client = { addEventListener(callback: typeof listener) { listener = callback; return () => { listener = undefined; }; }, async connect() {
-    listener?.({ type: "opened" }); listener?.({ type: "subscriptionSent" }); for (const payload of payloads) listener?.({ type: "payloadReceived", payload });
+    listener?.({ type: "opened" }); listener?.({ type: "subscriptionSent" });
+    for (const payload of payloads) {
+      listener?.({ type: "payloadReceived", payload });
+      payloadIndex++;
+    }
   }, disconnect() {} } as unknown as GvgRealtimeClient;
   await runPhase5KoObserveLoop(config, {} as Firestore, { createRealtimeClient: () => client, createStore: () => store,
     resolveBattleSubscriptionScope: async () => scope, createNotificationCoordinator: async () => new NoopNotificationCoordinator(),
-    now: () => new Date(Date.parse("2026-06-11T12:00:00Z") + clock), monotonicNow: () => clock,
+    now: () => new Date(Date.parse("2026-06-11T11:44:59Z") + (payloadIndex ? 1000 : 0) + clock), monotonicNow: () => clock,
     sleep: async (ms) => { clock += ms; }, ...overrides });
   return store;
 }
@@ -52,7 +57,7 @@ function castle(overrides: Partial<{ guildId: number; attackerGuildId: number; d
   view.setUint32(0, buildGvgStreamId({ castleId: 1, block: 0, worldGroupId: 0, gvgClass: 0, worldId: 1037 }), true);
   view.setUint32(4, overrides.guildId ?? 111111111, true); view.setUint32(8, overrides.attackerGuildId ?? 222222222, true);
   view.setUint16(16, overrides.defense ?? 10, true); view.setUint16(18, overrides.attack ?? 10, true);
-  view.setUint8(20, overrides.ko ? GVG_CASTLE_STATE.activeBattle : GVG_CASTLE_STATE.activeDeclared);
+  view.setUint8(20, GVG_CASTLE_STATE.activeDeclared);
   view.setUint16(22, overrides.ko ?? 0, true); return bytes;
 }
 
@@ -73,9 +78,10 @@ test("normalizes Grand Battle short guild ids to their participant worlds", asyn
 });
 
 test("retains old owner totals after a castle ownership change", async () => {
-  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 }), castle({ guildId: 222222222, ko: 0 }), castle({ guildId: 222222222, ko: 3, defense: 9 })]);
+  const store = await run([castle(), castle({ ko: 3, defense: 9 }), castle({ ko: 7, defense: 8 }),
+    castle({ guildId: 333333333, ko: 3, defense: 10 }), castle({ guildId: 333333333, ko: 6, defense: 9 })]);
   assert.equal(store.totals().get("111111111037")?.totalVictimKoCount, 7);
-  assert.equal(store.totals().get("222222222037")?.totalVictimKoCount, 3);
+  assert.equal(store.totals().get("333333333037")?.totalVictimKoCount, 3);
 });
 
 test("resolves production target through guildShares", async () => {
@@ -104,7 +110,7 @@ test("passes normalized observations with display sides, names and receipt time"
   assert.equal(observations[0].ownerGuildId, "111111111037");
   assert.equal(observations[0].attackerGuildId, "222222222037");
   assert.equal(observations[0].defenseCount, 3); assert.equal(observations[0].attackCount, 5);
-  assert.equal(observations[0].observedAt.toISOString(), "2026-06-11T12:00:00.000Z");
+  assert.equal(observations[0].observedAt.toISOString(), "2026-06-11T11:44:59.000Z");
   assert.equal(observations[0].castleName, "ブラッセル");
 });
 

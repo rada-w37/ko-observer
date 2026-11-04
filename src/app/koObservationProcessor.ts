@@ -84,7 +84,7 @@ export class KoObservationProcessor {
       const result = this.accumulator.observe({ castleId: message.castleId, defenderGuildId: ownerGuildId, defenderGuildName: ownerGuildName,
         attackerGuildId, attackerGuildName, defensePartyCount: message.defensePartyCount, attackPartyCount: message.attackPartyCount,
         koCount: message.lastWinPartyKnockOutCount, observedAt: receivedAt,
-        declaredBeforeBattle: previousPhase === GVG_CASTLE_STATE.activeDeclared && phase === GVG_CASTLE_STATE.activeBattle,
+        normalBattlePhase: phase === GVG_CASTLE_STATE.activeDeclared,
         counterattackBoundary: isCounterattack(previousPhase) || isCounterattack(phase),
         freshPartyKoLowerBound: placementMinimum ?? 1 });
       this.castlePhases.set(message.castleId, phase);

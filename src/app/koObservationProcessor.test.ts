@@ -7,6 +7,7 @@ import { GVG_CASTLE_STATE } from "../mentemori/types.js";
 import { NoopNotificationCoordinator } from "../notifications/application/notificationCoordinator.js";
 
 const observedAt = new Date("2026-11-02T11:45:01Z");
+const beforeBattle = new Date("2026-11-02T11:44:59Z");
 const scope: ActiveBattleScope = { battleType: "guildBattle", subscriptionType: "guildBattle", worldId: "1037",
   guildId: null, classId: null, worldGroupId: null, blockId: null };
 
@@ -19,19 +20,45 @@ function fixture(checkpoint: ObservationCheckpoint = {
   return { processor, logs };
 }
 
-function castlePayload(koCount = 0, defensePartyCount = 100, guildId = 111111111): Uint8Array {
+function castlePayload(koCount = 0, defensePartyCount = 100, guildId = 111111111, phase: number = GVG_CASTLE_STATE.activeDeclared, castleId = 1): Uint8Array {
   const bytes = new Uint8Array(24);
   const view = new DataView(bytes.buffer);
-  view.setUint32(0, buildGvgStreamId({ castleId: 1, worldId: 1037, block: 0, worldGroupId: 0, gvgClass: 0 }), true);
+  view.setUint32(0, buildGvgStreamId({ castleId, worldId: 1037, block: 0, worldGroupId: 0, gvgClass: 0 }), true);
   view.setUint32(4, guildId, true); view.setUint32(8, 222222222, true);
   view.setUint16(16, defensePartyCount, true); view.setUint16(18, 100, true); view.setUint16(22, koCount, true);
-  view.setUint8(20, koCount === 0 ? GVG_CASTLE_STATE.activeDeclared : GVG_CASTLE_STATE.activeBattle);
+  view.setUint8(20, phase);
   return bytes;
 }
 
+test("normal battle keeps pre-battle zero evidence through additional zero frames", () => {
+  const { processor } = fixture();
+  processor.process(castlePayload(), beforeBattle);
+  processor.process(castlePayload(0, 101), new Date("2026-11-02T11:45:00Z"));
+  processor.process(castlePayload(3, 100), observedAt);
+  processor.process(castlePayload(6, 99), observedAt);
+  const publication = processor.takePublication(observedAt);
+  assert.equal(publication.checkpoint.accumulator.castleStates[0].defenseVictimKoTotal, 6);
+  assert.equal(publication.publishTotals, true);
+});
+
+test("zero evidence is lost on an unexplained party loss, changed guilds or reconnect", () => {
+  for (const boundary of ["party loss", "guild change", "reconnect"]) {
+    const { processor } = fixture();
+    processor.process(castlePayload(), beforeBattle);
+    if (boundary === "reconnect") processor.beginObservationEpoch();
+    const defense = boundary === "party loss" ? 99 : 100;
+    const guildId = boundary === "guild change" ? 333333333 : 111111111;
+    processor.process(castlePayload(0, defense, guildId), observedAt);
+    processor.process(castlePayload(3, defense - 1, guildId), observedAt);
+    assert.equal(processor.accumulator.getGuildTotals().size, 0, boundary);
+    processor.process(castlePayload(6, defense - 2, guildId), observedAt);
+    assert.equal(processor.accumulator.getGuildTotals().get(`${guildId}037`)?.totalVictimKoCount, 3, boundary);
+  }
+});
+
 test("progress distinguishes a confirmed KO from pending attribution", () => {
   const { processor } = fixture();
-  processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(), beforeBattle);
   processor.process(castlePayload(3), observedAt);
   assert.match(processor.progress, /attributedKo=0 pendingKo=3\.\.3/);
   processor.process(castlePayload(6, 99), observedAt);
@@ -40,7 +67,7 @@ test("progress distinguishes a confirmed KO from pending attribution", () => {
 
 test("reconnect makes closed evidence publishable without another observation of the castle", () => {
   const { processor } = fixture();
-  processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(), beforeBattle);
   processor.process(castlePayload(3), observedAt);
   const before = processor.takePublication(observedAt);
   processor.beginObservationEpoch();
@@ -54,19 +81,19 @@ test("reconnect makes closed evidence publishable without another observation of
 
 test("publication logs input, viable transitions and confirmed credit in bounded batches", () => {
   const { processor, logs } = fixture();
-  processor.process(castlePayload(), observedAt);
+  processor.process(castlePayload(), beforeBattle);
   processor.process(castlePayload(3, 99), observedAt);
   processor.process(castlePayload(3, 99, 222222222), observedAt);
   for (let i = 0; i < 127; i++) processor.process(castlePayload(3, 99, 222222222), observedAt);
   assert.equal(logs.length, 0);
   processor.takePublication(observedAt);
-  assert.match(logs[0], /omitted=2/);
+  assert.match(logs[0], /omitted=1/);
   const decisions = JSON.parse(logs[0].split(" decisions=")[1]);
   assert.equal(decisions.length, 128);
-  assert.equal(decisions[1].minimumFreshPartySize, 3);
-  assert.equal(decisions[1].defenseCredit, 3);
-  assert.deepEqual(decisions[1].transitions, ["first_battle"]);
-  assert.deepEqual(decisions[1].previous, { ko: 0, defense: 100, attack: 100 });
+  assert.equal(decisions[0].minimumFreshPartySize, 3);
+  assert.equal(decisions[0].defenseCredit, 3);
+  assert.deepEqual(decisions[0].transitions, ["first_battle"]);
+  assert.deepEqual(decisions[0].previous, { ko: 0, defense: 100, attack: 100 });
   assert.ok(decisions.at(-1).transitions.includes("switch"));
   processor.takePublication(observedAt);
   assert.equal(logs.length, 1);

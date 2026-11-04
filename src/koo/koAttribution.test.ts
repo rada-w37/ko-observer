@@ -8,7 +8,12 @@ function observation(koCount: number, defensePartyCount = 100, attackPartyCount 
 }
 function play(...frames: KoCastleObservation[]): KoCastleState {
   let state: KoCastleState | undefined;
-  for (const frame of frames) state = applyKoObservation(state, frame).state;
+  let freshBattleZero = false;
+  for (const frame of frames) {
+    const result = applyKoObservation(state, frame, freshBattleZero);
+    state = result.state;
+    freshBattleZero = result.freshBattleZero;
+  }
   return state!;
 }
 test("first nonzero observation is only a baseline", () => {

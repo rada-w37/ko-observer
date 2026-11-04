@@ -10,7 +10,7 @@ export type KoCastleObservation = {
   attackPartyCount: number;
   koCount: number;
   observedAt: Date;
-  declaredBeforeBattle?: boolean;
+  normalBattlePhase?: boolean;
   counterattackBoundary?: boolean;
   freshPartyKoLowerBound?: KoLowerBound;
 };
@@ -61,6 +61,7 @@ export type KoStateUpdateResult = {
   shouldPersistCastle: boolean;
   shouldUpdateGuildTotals: boolean;
   checkpointSlot: number | null;
+  freshBattleZero: boolean;
   reasons: KoPersistReason[];
   decision: { previous: KoBattleCounts | null; current: KoBattleCounts; transitions: Array<KoTransition | "baseline" | "reset" | "model_mismatch" | "unverified_zero_baseline" | "counterattack_baseline">; defenseCredit: number; attackCredit: number };
 };
@@ -106,7 +107,8 @@ export function resetKoEvidence(state: KoCastleState): KoCastleState {
     lastKoCount: null, lastDefensePartyCount: null, lastAttackPartyCount: null };
 }
 
-export function applyKoObservation(previousState: KoCastleState | undefined, observation: KoCastleObservation): KoStateUpdateResult {
+export function applyKoObservation(previousState: KoCastleState | undefined, observation: KoCastleObservation,
+  previousFreshBattleZero = false): KoStateUpdateResult {
   const checkpointSlot = calculateCheckpointSlot(observation.observedAt);
   let state = previousState ? structuredClone(previousState) : createInitialKoCastleState(observation.castleId);
   const changed = previousState !== undefined && (state.defenderGuildId !== observation.defenderGuildId || state.attackerGuildId !== observation.attackerGuildId);
@@ -120,16 +122,21 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   state.attackerGuildId = observation.attackerGuildId; state.attackerGuildName = observation.attackerGuildName;
   let defenseCredit = 0, attackCredit = 0;
   const current = { ko: observation.koCount, defense: observation.defensePartyCount, attack: observation.attackPartyCount };
+  const previous = state.lastKoCount === null || state.lastDefensePartyCount === null || state.lastAttackPartyCount === null
+    ? null : { ko: state.lastKoCount, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount };
+  const freshBattleZero = current.ko === 0 && observation.normalBattlePhase !== false && !observation.counterattackBoundary &&
+    (checkpointSlot === null || (previousFreshBattleZero && previous?.ko === 0)) &&
+    (!previous || (current.defense >= previous.defense && current.attack >= previous.attack));
   const decision: KoStateUpdateResult["decision"] = { previous: null, current, transitions: ["baseline"], defenseCredit: 0, attackCredit: 0 };
   if (observation.counterattackBoundary) {
     state = resetKoEvidence(state);
     decision.transitions = ["counterattack_baseline"];
     reasons.push("counterattack_baseline");
-  } else if (checkpointSlot !== null && state.lastKoCount !== null && state.lastDefensePartyCount !== null && state.lastAttackPartyCount !== null) {
-    const previousKo = state.lastKoCount;
-    decision.previous = { ko: previousKo, defense: state.lastDefensePartyCount, attack: state.lastAttackPartyCount };
+  } else if (checkpointSlot !== null && previous) {
+    const previousKo = previous.ko;
+    decision.previous = previous;
     if (observation.koCount === 0) { state = resetKoEvidence(state); decision.transitions = ["reset"]; }
-    else if (previousKo === 0 && state.lastCheckpointSlot !== null && !observation.declaredBeforeBattle) {
+    else if (previousKo === 0 && (!previousFreshBattleZero || observation.normalBattlePhase === false)) {
       decision.transitions = ["unverified_zero_baseline"];
     } else {
       const result = advanceKoCandidates(state.candidates,
@@ -156,7 +163,7 @@ export function applyKoObservation(previousState: KoCastleState | undefined, obs
   updateLastRawCounts(state, observation);
   decision.defenseCredit = defenseCredit; decision.attackCredit = attackCredit;
   return { state, decision, shouldPersistCastle: changed || defenseCredit + attackCredit > 0 || reasons.length > 0,
-    shouldUpdateGuildTotals: defenseCredit + attackCredit > 0, checkpointSlot, reasons };
+    shouldUpdateGuildTotals: defenseCredit + attackCredit > 0, checkpointSlot, freshBattleZero, reasons };
 }
 
 export function createKoCastlePublicSnapshot(state: KoCastleState): KoCastlePublicSnapshot {
